@@ -4,6 +4,10 @@
 
 A standalone Go component library for **structured biological inspection and construction** in the terminal. Sequences, molecules, plates, tracks, trees, maps, and workbenches — rendered natively on Charm v2.
 
+CRITICAL RULES: 
+1. don't create branches, you work in your own folder
+2. Follow the key design principles to ensure full integration
+3. Build only what is asked for (no crazy applications) and built it robust, professional, modular and dynamic
 ---
 
 ## Identity
