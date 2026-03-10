@@ -9,8 +9,10 @@ package periodictable
 import (
 	"fmt"
 	"image/color"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -37,6 +39,7 @@ type Model struct {
 	highlights    map[string]struct{}
 	mode          viewMode
 	showHelp      bool
+	jumpQuery     string
 }
 
 // New creates a PeriodicTable with the given options.
@@ -76,32 +79,66 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.showHelp {
+		switch msg.String() {
+		case "esc", "?":
+			m.showHelp = false
+		}
+		return m, nil
+	}
+
 	switch key := msg.String(); key {
 	case "left":
+		m.clearJumpQuery()
 		m.moveHorizontal(-1)
 	case "right":
+		m.clearJumpQuery()
 		m.moveHorizontal(1)
 	case "up":
+		m.clearJumpQuery()
 		m.moveVertical(-1)
 	case "down":
+		m.clearJumpQuery()
 		m.moveVertical(1)
+	case "home":
+		m.clearJumpQuery()
+		m.jumpToRowEdge(-1)
+	case "end":
+		m.clearJumpQuery()
+		m.jumpToRowEdge(1)
+	case "pgup":
+		m.clearJumpQuery()
+		m.stepPeriod(-1)
+	case "pgdown":
+		m.clearJumpQuery()
+		m.stepPeriod(1)
 	case "tab":
+		m.clearJumpQuery()
 		m.mode = m.mode.next(1)
 	case "shift+tab":
+		m.clearJumpQuery()
 		m.mode = m.mode.next(-1)
+	case "backspace":
+		m.backspaceJumpQuery()
 	case "enter":
+		m.clearJumpQuery()
 		return m, submitCmd(m.focusedNumber)
 	case "esc":
-		if m.showHelp {
-			m.showHelp = false
+		if m.jumpQuery != "" {
+			m.clearJumpQuery()
 			return m, nil
 		}
 		return m, cancelCmd()
 	case "?":
-		m.showHelp = !m.showHelp
+		m.showHelp = true
 	default:
 		if len(key) == 1 && key[0] >= '1' && key[0] <= '7' {
+			m.clearJumpQuery()
 			m.jumpToPeriod(int(key[0] - '0'))
+			return m, nil
+		}
+		if isJumpQueryKey(msg) {
+			m.extendJumpQuery(msg.Text)
 		}
 	}
 
@@ -131,6 +168,10 @@ func (m Model) render() string {
 	}
 	parts = append(parts, lipgloss.NewStyle().Foreground(m.theme.Border).Render(strings.Repeat("-", tableWidth)))
 	parts = append(parts, m.renderDetailPanel(width))
+	if m.jumpQuery != "" {
+		parts = append(parts, m.renderJumpPanel(width))
+	}
+	parts = append(parts, m.renderFooter(width))
 	if m.showHelp {
 		parts = append(parts, m.renderHelp(width))
 	}
@@ -183,22 +224,42 @@ func (m Model) renderHeader(width int) string {
 		Foreground(m.theme.Text).
 		Width(width).
 		Align(lipgloss.Center)
-	subtitleStyle := lipgloss.NewStyle().
-		Foreground(m.theme.TextMuted).
-		Width(width).
-		Align(lipgloss.Center)
-
-	current := m.Selected()
-	focusLabel := "No selection"
-	if current != nil {
-		focusLabel = fmt.Sprintf("%s [%s] | %s lens", current.Name, current.Symbol, m.mode.label())
-	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Center,
 		titleStyle.Render("Periodic Table"),
-		subtitleStyle.Render(focusLabel),
+		m.renderLensBar(width),
+		m.renderFindBar(width),
 	)
+}
+
+func (m Model) renderLensBar(width int) string {
+	var tabs []string
+	for _, mode := range []viewMode{viewModeSymbol, viewModeMass, viewModeElectronegativity, viewModeElectronConfig} {
+		style := lipgloss.NewStyle().
+			Padding(0, 1).
+			Foreground(m.theme.TextMuted)
+		if mode == m.mode {
+			style = style.Background(m.theme.Selected).Foreground(m.theme.Text).Bold(true)
+		}
+		tabs = append(tabs, style.Render(mode.tabLabel()))
+	}
+
+	return lipgloss.NewStyle().
+		Width(width).
+		Align(lipgloss.Center).
+		Render(strings.Join(tabs, " "))
+}
+
+func (m Model) renderFindBar(width int) string {
+	style := lipgloss.NewStyle().
+		Width(width).
+		Align(lipgloss.Center).
+		Foreground(m.theme.TextMuted)
+	if m.jumpQuery != "" {
+		style = style.Foreground(m.theme.Text)
+	}
+	return style.Render(truncateText(m.findBarText(), width))
 }
 
 func (m Model) renderGroupHeader(cellWidth int) string {
@@ -284,33 +345,33 @@ func (m Model) renderDetailPanel(width int) string {
 	mutedStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
 
 	firstLine := strings.Join([]string{
-		fmt.Sprintf("[%s] %s", element.Symbol, element.Name),
-		fmt.Sprintf("Atomic #%d", element.Number),
-		fmt.Sprintf("Group %s, Period %d", groupLabel(*element), element.Period),
+		fmt.Sprintf("[%d] %s %s", element.Number, element.Symbol, element.Name),
 		humanizeCategory(element.Category),
+		fmt.Sprintf("Group %s", groupLabel(*element)),
+		fmt.Sprintf("Period %d", element.Period),
 	}, " | ")
 
 	secondLine := strings.Join([]string{
+		fmt.Sprintf("Grid: %s", m.mode.label()),
 		fmt.Sprintf("Mass: %s u", formatMass(element.AtomicMass)),
-		fmt.Sprintf("Electronegativity: %s", formatElectronegativity(element.Electronegativity)),
-		fmt.Sprintf("Config: %s", element.ElectronConfig),
+		fmt.Sprintf("EN: %s", formatElectronegativity(element.Electronegativity)),
 	}, " | ")
 
-	thirdParts := []string{
+	thirdLine := fmt.Sprintf("Config: %s", element.ElectronConfig)
+
+	fourthParts := []string{
 		fmt.Sprintf("vdW: %s", formatRadius(element.VdwRadius)),
 		fmt.Sprintf("Covalent: %s", formatRadius(element.CovalentRadius)),
-		fmt.Sprintf("View: %s", m.mode.label()),
 	}
 	if _, ok := m.highlights[element.Symbol]; ok {
-		thirdParts = append(thirdParts, "Highlighted")
+		fourthParts = append(fourthParts, "In highlight set")
+	} else if len(m.highlights) > 0 {
+		fourthParts = append(fourthParts, fmt.Sprintf("Highlights: %d", len(m.highlights)))
 	}
-	if len(m.highlights) > 0 {
-		thirdParts = append(thirdParts, fmt.Sprintf("Highlights: %d", len(m.highlights)))
-	}
-	thirdLine := strings.Join(thirdParts, " | ")
+	fourthLine := strings.Join(fourthParts, " | ")
 
 	panelWidth := width
-	for _, line := range []string{firstLine, secondLine, thirdLine} {
+	for _, line := range []string{firstLine, secondLine, thirdLine, fourthLine} {
 		if panelWidth < lipgloss.Width(line) {
 			panelWidth = lipgloss.Width(line)
 		}
@@ -321,21 +382,42 @@ func (m Model) renderDetailPanel(width int) string {
 		lineStyle.Width(panelWidth).Render(truncateText(firstLine, panelWidth)),
 		mutedStyle.Width(panelWidth).Render(truncateText(secondLine, panelWidth)),
 		mutedStyle.Width(panelWidth).Render(truncateText(thirdLine, panelWidth)),
+		mutedStyle.Width(panelWidth).Render(truncateText(fourthLine, panelWidth)),
 	)
 }
 
-func (m Model) renderHelp(width int) string {
+func (m Model) renderJumpPanel(width int) string {
 	helpWidth := width - 2
-	if helpWidth < 48 {
-		helpWidth = 48
+	if helpWidth < 54 {
+		helpWidth = 54
 	}
 
-	body := strings.Join([]string{
-		"Arrows move through the table while skipping layout gaps.",
-		"Tab cycles lenses: symbol, mass, electronegativity, electron config.",
-		"1-7 jumps directly to a period. Enter submits the focused element.",
-		"Esc closes help first, then cancels. ? toggles this overlay.",
-	}, "\n")
+	matches := rankedMatches(m.jumpQuery, 5)
+	lines := []string{
+		fmt.Sprintf("Find results for %q", m.jumpQuery),
+	}
+
+	if len(matches) == 0 {
+		lines = append(lines, "No elements match yet")
+	} else {
+		lines = append(lines, fmt.Sprintf("Best match: %s [%s]", matches[0].Name, matches[0].Symbol))
+		for i, element := range matches {
+			prefix := "  "
+			if i == 0 {
+				prefix = "> "
+			}
+			lines = append(lines, fmt.Sprintf(
+				"%s%-3s %-12s group %s period %d",
+				prefix,
+				element.Symbol,
+				element.Name,
+				groupLabel(element),
+				element.Period,
+			))
+		}
+	}
+
+	lines = append(lines, "Backspace deletes | Esc clears | Enter selects the current element")
 
 	asciiBorder := lipgloss.Border{
 		Top:         "-",
@@ -354,7 +436,82 @@ func (m Model) renderHelp(width int) string {
 		Padding(0, 1).
 		Width(helpWidth).
 		Foreground(m.theme.TextMuted).
-		Render(body)
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderFooter(width int) string {
+	hints := "Arrows browse | Type symbol or name to find | Tab changes grid | Enter selects | ? more keys"
+	switch {
+	case m.showHelp:
+		hints = "Esc closes help | Enter selects the focused element"
+	case m.jumpQuery != "":
+		hints = "Type to refine | Backspace deletes | Enter selects | Esc stops finding"
+	case width >= 110:
+		hints += " | Home/End row | PgUp/PgDn period"
+	}
+	return lipgloss.NewStyle().
+		Foreground(m.theme.TextMuted).
+		Width(width).
+		Align(lipgloss.Center).
+		Render(truncateText(hints, width))
+}
+
+func (m Model) renderHelp(width int) string {
+	helpWidth := width - 2
+	if helpWidth < 72 {
+		helpWidth = 72
+	}
+
+	lines := []string{
+		"Browse: arrows follow the table geometry, including the detached Ln and An bridges",
+		"Find: type a symbol or name at any time and the best match becomes the focus",
+		"Step back: Esc closes help first, then clears find, then cancels the component",
+		"Power keys: Home/End row edges | PgUp/PgDn periods | 1-7 exact periods | Shift+Tab reverse lens",
+		"Select: Enter submits the focused element",
+	}
+
+	var rendered []string
+	for _, line := range lines {
+		rendered = append(rendered, truncateText(line, helpWidth-4))
+	}
+
+	asciiBorder := lipgloss.Border{
+		Top:         "-",
+		Bottom:      "-",
+		Left:        "|",
+		Right:       "|",
+		TopLeft:     "+",
+		TopRight:    "+",
+		BottomLeft:  "+",
+		BottomRight: "+",
+	}
+
+	return lipgloss.NewStyle().
+		Border(asciiBorder).
+		BorderForeground(m.theme.Border).
+		Padding(0, 1).
+		Width(helpWidth).
+		Foreground(m.theme.TextMuted).
+		Render(strings.Join(rendered, "\n"))
+}
+
+func (m Model) findBarText() string {
+	if m.jumpQuery == "" {
+		return "Find element: Type symbol or name"
+	}
+
+	best, total, ok := previewJumpQuery(m.jumpQuery)
+	if !ok {
+		return fmt.Sprintf("Find element: %s (no matches)", m.jumpQuery)
+	}
+
+	if element, matches, unique := resolveJumpQuery(m.jumpQuery); unique {
+		return fmt.Sprintf("Find element: %s -> %s [%s]", m.jumpQuery, element.Name, element.Symbol)
+	} else if matches > 1 {
+		return fmt.Sprintf("Find element: %s -> %s [%s] (%d matches)", m.jumpQuery, best.Name, best.Symbol, total)
+	}
+
+	return fmt.Sprintf("Find element: %s -> %s [%s]", m.jumpQuery, best.Name, best.Symbol)
 }
 
 func (m Model) categoryColor(category string) color.Color {
@@ -385,6 +542,11 @@ func (m Model) categoryColor(category string) color.Color {
 }
 
 func (m *Model) moveHorizontal(delta int) {
+	if next, ok := bridgedHorizontalNumber(m.focusedNumber, delta); ok {
+		m.focusedNumber = next
+		return
+	}
+
 	row, col, ok := elementPosition(m.focusedNumber)
 	if !ok {
 		return
@@ -402,11 +564,65 @@ func (m *Model) moveVertical(delta int) {
 	if !ok {
 		return
 	}
+	if delta < 0 && row == 8 {
+		if element, ok := closestElementInRow(6, col); ok {
+			m.focusedNumber = element.Number
+		}
+		return
+	}
+	if delta > 0 && row == 9 {
+		if element, ok := closestElementInRow(7, col); ok {
+			m.focusedNumber = element.Number
+		}
+		return
+	}
 	for nextRow := row + delta; nextRow >= 1 && nextRow <= 9; nextRow += delta {
 		if element, ok := elementAt(nextRow, col); ok {
 			m.focusedNumber = element.Number
 			return
 		}
+	}
+}
+
+func (m *Model) jumpToRowEdge(direction int) {
+	row, _, ok := elementPosition(m.focusedNumber)
+	if !ok {
+		return
+	}
+
+	if direction < 0 {
+		for col := 1; col <= 18; col++ {
+			if element, ok := elementAt(row, col); ok {
+				m.focusedNumber = element.Number
+				return
+			}
+		}
+		return
+	}
+
+	for col := 18; col >= 1; col-- {
+		if element, ok := elementAt(row, col); ok {
+			m.focusedNumber = element.Number
+			return
+		}
+	}
+}
+
+func (m *Model) stepPeriod(delta int) {
+	current := m.Selected()
+	if current == nil {
+		return
+	}
+	targetPeriod := current.Period + delta
+	if targetPeriod < 1 || targetPeriod > 7 {
+		return
+	}
+	_, preferredCol, ok := elementPosition(m.focusedNumber)
+	if !ok {
+		preferredCol = 1
+	}
+	if element, ok := closestElementInRow(targetPeriod, preferredCol); ok {
+		m.focusedNumber = element.Number
 	}
 }
 
@@ -418,6 +634,46 @@ func (m *Model) jumpToPeriod(period int) {
 	if element, ok := closestElementInRow(period, preferredCol); ok {
 		m.focusedNumber = element.Number
 	}
+}
+
+func (m *Model) extendJumpQuery(text string) {
+	candidate := strings.ToLower(m.jumpQuery + text)
+	if m.applyJumpQuery(candidate) {
+		return
+	}
+	if m.applyJumpQuery(strings.ToLower(text)) {
+		return
+	}
+	m.jumpQuery = ""
+}
+
+func (m *Model) applyJumpQuery(query string) bool {
+	best, _, ok := previewJumpQuery(query)
+	if !ok {
+		return false
+	}
+	m.jumpQuery = strings.ToLower(query)
+	m.focusedNumber = best.Number
+	return true
+}
+
+func (m *Model) backspaceJumpQuery() {
+	if m.jumpQuery == "" {
+		return
+	}
+	runes := []rune(m.jumpQuery)
+	if len(runes) == 1 {
+		m.jumpQuery = ""
+		return
+	}
+	m.jumpQuery = string(runes[:len(runes)-1])
+	if best, _, ok := previewJumpQuery(m.jumpQuery); ok {
+		m.focusedNumber = best.Number
+	}
+}
+
+func (m *Model) clearJumpQuery() {
+	m.jumpQuery = ""
 }
 
 func (mode viewMode) next(delta int) viewMode {
@@ -439,6 +695,19 @@ func (mode viewMode) label() string {
 		return "electron config"
 	default:
 		return "symbol"
+	}
+}
+
+func (mode viewMode) tabLabel() string {
+	switch mode {
+	case viewModeMass:
+		return "Mass"
+	case viewModeElectronegativity:
+		return "EN"
+	case viewModeElectronConfig:
+		return "Config"
+	default:
+		return "Symbol"
 	}
 }
 
@@ -484,6 +753,137 @@ func cancelCmd() tea.Cmd {
 			Component: componentKey,
 			Reason:    "user cancelled",
 		}
+	}
+}
+
+func resolveJumpQuery(query string) (Element, int, bool) {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return Element{}, 0, false
+	}
+
+	if element, ok := elementBySymbol(query); ok {
+		return element, 1, true
+	}
+
+	for _, element := range allElements {
+		if strings.ToLower(element.Name) == query {
+			return element, 1, true
+		}
+		if strconv.Itoa(element.Number) == query {
+			return element, 1, true
+		}
+	}
+
+	matches := rankedMatches(query, 32)
+	if len(matches) == 1 {
+		return matches[0], 1, true
+	}
+	return Element{}, len(matches), false
+}
+
+func previewJumpQuery(query string) (Element, int, bool) {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return Element{}, 0, false
+	}
+
+	matches := rankedMatches(query, 32)
+	if len(matches) == 0 {
+		return Element{}, 0, false
+	}
+	return matches[0], len(matches), true
+}
+
+func rankedMatches(query string, limit int) []Element {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return nil
+	}
+
+	type scored struct {
+		element Element
+		score   int
+	}
+
+	var matches []scored
+	for _, element := range allElements {
+		if score, ok := searchScore(query, element); ok {
+			matches = append(matches, scored{element: element, score: score})
+		}
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score < matches[j].score
+		}
+		return matches[i].element.Number < matches[j].element.Number
+	})
+
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+
+	elements := make([]Element, 0, len(matches))
+	for _, match := range matches {
+		elements = append(elements, match.element)
+	}
+	return elements
+}
+
+func searchScore(query string, element Element) (int, bool) {
+	symbol := strings.ToLower(element.Symbol)
+	name := strings.ToLower(element.Name)
+	number := strconv.Itoa(element.Number)
+
+	switch {
+	case query == symbol:
+		return 0, true
+	case query == name:
+		return 1, true
+	case query == number:
+		return 2, true
+	case strings.HasPrefix(symbol, query):
+		return 3, true
+	case strings.HasPrefix(name, query):
+		return 4, true
+	case strings.HasPrefix(number, query):
+		return 5, true
+	case strings.Contains(name, query):
+		return 6, true
+	default:
+		return 0, false
+	}
+}
+
+func bridgedHorizontalNumber(number, delta int) (int, bool) {
+	switch {
+	case delta > 0 && number == 56:
+		return 57, true
+	case delta > 0 && number >= 57 && number < 71:
+		return number + 1, true
+	case delta > 0 && number == 71:
+		return 72, true
+	case delta > 0 && number == 88:
+		return 89, true
+	case delta > 0 && number >= 89 && number < 103:
+		return number + 1, true
+	case delta > 0 && number == 103:
+		return 104, true
+	case delta < 0 && number == 72:
+		return 71, true
+	case delta < 0 && number > 57 && number <= 71:
+		return number - 1, true
+	case delta < 0 && number == 57:
+		return 56, true
+	case delta < 0 && number == 104:
+		return 103, true
+	case delta < 0 && number > 89 && number <= 103:
+		return number - 1, true
+	case delta < 0 && number == 89:
+		return 88, true
+	default:
+		return 0, false
 	}
 }
 
@@ -614,4 +1014,12 @@ func truncateText(text string, width int) string {
 		return string(runes[:width])
 	}
 	return string(runes[:width-3]) + "..."
+}
+
+func isJumpQueryKey(msg tea.KeyPressMsg) bool {
+	if msg.Mod != 0 || msg.Text == "" {
+		return false
+	}
+	runes := []rune(msg.Text)
+	return len(runes) == 1 && (unicode.IsLetter(runes[0]) || unicode.IsDigit(runes[0]))
 }

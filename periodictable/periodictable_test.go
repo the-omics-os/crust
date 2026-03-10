@@ -97,6 +97,43 @@ func TestEnterReturnsSubmitMsg(t *testing.T) {
 	}
 }
 
+func TestJumpQueryBySymbol(t *testing.T) {
+	model := New()
+	updated, _ := model.Update(tea.KeyPressMsg{Text: "f"})
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Text: "e"})
+	got := updated.(Model).Selected()
+	if got == nil || got.Symbol != "Fe" {
+		t.Fatalf("expected symbol jump to land on Fe, got %#v", got)
+	}
+}
+
+func TestJumpQueryByNamePrefix(t *testing.T) {
+	model := New()
+	updated, _ := model.Update(tea.KeyPressMsg{Text: "s"})
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Text: "o"})
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Text: "d"})
+	got := updated.(Model).Selected()
+	if got == nil || got.Symbol != "Na" {
+		t.Fatalf("expected name-prefix jump to land on Na, got %#v", got)
+	}
+}
+
+func TestEscClearsJumpQueryBeforeCancelling(t *testing.T) {
+	model := New()
+	updated, _ := model.Update(tea.KeyPressMsg{Text: "m"})
+	if updated.(Model).jumpQuery == "" {
+		t.Fatal("expected jump query to be active")
+	}
+
+	updated, cmd := updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if updated.(Model).jumpQuery != "" {
+		t.Fatal("expected esc to clear jump query first")
+	}
+	if cmd != nil {
+		t.Fatal("did not expect cancel cmd while jump query was active")
+	}
+}
+
 func TestEscClosesHelpBeforeCancelling(t *testing.T) {
 	model := New()
 	updated, _ := model.Update(tea.KeyPressMsg{Text: "?"})
@@ -121,6 +158,39 @@ func TestEscClosesHelpBeforeCancelling(t *testing.T) {
 	}
 }
 
+func TestHomeAndEndJumpToRowEdges(t *testing.T) {
+	model := New(WithSelected("Fe"))
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyHome})
+	got := updated.(Model).Selected()
+	if got == nil || got.Symbol != "K" {
+		t.Fatalf("expected home from Fe to land on K, got %#v", got)
+	}
+
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	got = updated.(Model).Selected()
+	if got == nil || got.Symbol != "Kr" {
+		t.Fatalf("expected end from K to land on Kr, got %#v", got)
+	}
+}
+
+func TestPageDownStepsPeriod(t *testing.T) {
+	model := New(WithSelected("Fe"))
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	got := updated.(Model).Selected()
+	if got == nil || got.Symbol != "Ru" {
+		t.Fatalf("expected pgdown from Fe to land on Ru, got %#v", got)
+	}
+}
+
+func TestVerticalNavigationFromLanthanidesReturnsToPeriodSix(t *testing.T) {
+	model := New(WithSelected("La"))
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	got := updated.(Model).Selected()
+	if got == nil || got.Symbol != "Ba" {
+		t.Fatalf("expected up from La to land on Ba, got %#v", got)
+	}
+}
+
 func TestWindowSizeMsgSetsWidth(t *testing.T) {
 	model := New()
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 132})
@@ -132,7 +202,7 @@ func TestWindowSizeMsgSetsWidth(t *testing.T) {
 func TestRenderContainsFocusedElementDetails(t *testing.T) {
 	model := New(WithSelected("Fe"), WithHighlights("C", "N", "O", "S"))
 	output := model.Render()
-	for _, want := range []string{"Periodic Table", "Iron", "Atomic #26", "Config:", "Highlights: 4"} {
+	for _, want := range []string{"Periodic Table", "Iron", "Group 8", "Config:", "Type symbol or name", "Find element:", "Grid: symbol"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected render output to contain %q", want)
 		}

@@ -7,7 +7,8 @@ An interactive periodic table for Bubble Tea that turns the terminal into a chem
 ## Hero
 
 - Full 118-element periodic table with detached lanthanide and actinide rows.
-- Gap-aware arrow navigation, period jumps, lens switching, help overlay, and submit/cancel semantics.
+- Recognition-first navigation: arrows for spatial browsing, a visible find bar for symbol/name jumps, and `Esc` as a step-back key.
+- Row-edge jumps, period stepping, lens switching, help overlay, and submit/cancel semantics.
 - Category-aware coloring plus an external highlight layer for workflow-specific emphasis.
 - Detail panel with atomic mass, electronegativity, electron configuration, and radius data.
 
@@ -38,11 +39,16 @@ func main() {
 
 ## Interaction
 
+- Type an element symbol or name prefix at any time and the visible find bar updates immediately: `Fe`, `Na`, `iron`, `sodium`.
 - Arrow keys move through the real table layout and skip over empty gaps.
+- `Home` and `End` jump to the first or last populated element in the current row.
+- `PgUp` and `PgDn` step to the previous or next period while preserving horizontal context.
 - `Tab` cycles the in-cell lens: symbol, atomic mass, electronegativity, electron config.
+- `Shift+Tab` cycles the lens in reverse.
 - `1` through `7` jump directly to a period.
+- `Backspace` edits the active find query.
+- `Esc` always unwinds the lightest state first: close help, clear find, then cancel the component.
 - `Enter` returns a `crust.SubmitMsg` with the focused element.
-- `Esc` closes help first, then returns a `crust.CancelMsg`.
 - `?` toggles the help overlay.
 
 ## Public API
@@ -70,7 +76,9 @@ The grid stays intentionally compact so the periodic table remains perceivable a
 - `electronegativity`: useful when thinking about polarity and reactivity.
 - `electron config`: shows the last orbital token in-grid and the full configuration in the detail panel.
 
-That split keeps the world-level structure visible while still making the focused element information-rich.
+That split keeps the world-level structure visible while still making the focused element information-rich. The header keeps both the active lens and the current find state visible, while the footer changes with context so the component teaches the next likely action instead of dumping every shortcut at once.
+
+The detached f-block rows are also treated more deliberately now. Horizontal movement still bridges into and out of the lanthanide and actinide strips, and vertical movement from those detached rows returns to the nearest period-six or period-seven anchor instead of jumping to an arbitrary same-column element higher up the table.
 
 ## GIF Placeholder
 
