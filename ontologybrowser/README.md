@@ -1,6 +1,6 @@
 # OntologyBrowser
 
-Interactive ontology navigation for Bubble Tea. `ontologybrowser` renders a scrollable term tree with lazy expansion, a built-in search pane, single-node submission, and typed setters for host-driven data loading.
+Interactive ontology navigation for Bubble Tea. `ontologybrowser` renders a scrollable term tree with lazy expansion, a persistent filter bar, single-node submission, and typed setters for host-driven data loading.
 
 [GIF PLACEHOLDER: browsing roots, expanding branches, and selecting a term]
 
@@ -8,7 +8,7 @@ Interactive ontology navigation for Bubble Tea. `ontologybrowser` renders a scro
 
 - A standalone `tea.Model` that can be embedded directly into any Charm v2 application.
 - Lazy-loading via `ExpandMsg`, so the component never couples itself to a specific ontology API or file format.
-- A visible-node search pane for narrowing the currently loaded tree without switching mental context.
+- A persistent filter lens that searches all currently loaded terms and reveals matching paths inside the tree.
 - Submission through `crust.SubmitMsg` and cancellation through `crust.CancelMsg`, matching the rest of Crust.
 - Full theme control through `WithTheme`, plus width and height control for overlay integration.
 
@@ -47,7 +47,7 @@ Run the local interactive demo from this folder:
 go run ./cmd/demo
 ```
 
-This uses in-memory ontology data and exercises lazy expansion, search, selection, and cancel flows without touching any code outside `ontologybrowser/`.
+This uses in-memory ontology data and exercises lazy expansion, filtering, selection, and cancel flows without touching any code outside `ontologybrowser/`.
 
 ## Host Integration Pattern
 
@@ -76,26 +76,32 @@ When the user confirms a node, the browser emits `crust.SubmitMsg` with:
 
 ## Interaction Model
 
-- `Up` / `Down`: move through visible nodes
-- `Right` / `Enter`: expand a branch, or fetch children if the node is not loaded yet
+- `Up` / `Down`: move through the visible tree, or step through matches while filtering
+- `Right`: expand the current branch, or request children if they are not loaded yet
 - `Left`: collapse the current branch or move to its parent
-- `Tab` or `/`: focus the search pane
-- `Enter` in search: submit the highlighted result
-- `Esc`: leave help, leave search, or cancel the browser
+- `Enter`: select the currently highlighted term
+- `Type` or `/`: start filtering immediately
+- `Esc`: clear the filter, return to browse, or cancel the browser
+- `Tab`: switch between browse focus and filter focus
+- `Space`: toggle the current branch open or closed
 - `?`: show help
 
-## Search Behavior
+The footer includes a compact legend, and `?` expands that legend into the help view so the tree symbols and color semantics are explicit in the interface itself.
 
-Search only matches currently visible nodes. That keeps the component deterministic and independent of background fetch logic: if a branch has not been expanded yet, its hidden descendants are not part of the search result set.
+## Filter Behavior
 
-The search scorer prioritizes:
+Filtering searches all currently loaded terms, including descendants inside collapsed branches. When a match is selected, the browser expands the ancestor path so the user stays oriented in the tree instead of jumping into a disconnected result list.
+
+Unloaded descendants are not searchable yet. That boundary is intentional: the component stays data-source agnostic, while the host controls when more ontology structure is fetched.
+
+The match scorer prioritizes:
 
 1. Exact and substring matches in term name
 2. Matches in term ID
 3. Description matches
 4. Token and subsequence fallbacks for shorter fuzzy queries
 
-[GIF PLACEHOLDER: typing into search and selecting a result]
+[GIF PLACEHOLDER: typing into the filter bar and following revealed paths]
 
 ## Public API
 
@@ -117,5 +123,5 @@ func (m Model) Render() string
 ## Notes
 
 - The component is self-contained inside `ontologybrowser/`; no Lobster or protocol code is imported.
-- Search is intentionally scoped to visible nodes. If you need global ontology search, the host should provide it separately.
+- Filtering is scoped to the currently loaded ontology graph. If you need global ontology search beyond loaded nodes, the host should provide it separately.
 - I left the GIF anchors inline so you can replace them with recordings later without restructuring the document.

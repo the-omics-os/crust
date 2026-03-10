@@ -110,6 +110,34 @@ func flattenVisibleNodes(nodes []OntologyNode, expanded map[string]bool) []visib
 	return flattened
 }
 
+func flattenMatchingPaths(nodes []OntologyNode, include map[string]bool) []visibleNode {
+	var flattened []visibleNode
+	for i := range nodes {
+		if !include[nodes[i].ID] {
+			continue
+		}
+		flattened = append(flattened, visibleNode{
+			NodeID: nodes[i].ID,
+			Depth:  nodes[i].Depth,
+		})
+		if len(nodes[i].Children) > 0 {
+			flattened = append(flattened, flattenMatchingPaths(nodes[i].Children, include)...)
+		}
+	}
+	return flattened
+}
+
+func includedPathSet(nodes []OntologyNode, matches []searchResult) map[string]bool {
+	include := make(map[string]bool, len(matches))
+	for _, match := range matches {
+		path := pathToNode(nodes, match.NodeID)
+		for _, node := range path {
+			include[node.ID] = true
+		}
+	}
+	return include
+}
+
 func pathToNode(nodes []OntologyNode, id string) []OntologyNode {
 	var path []OntologyNode
 	if collectPath(nodes, id, &path) {

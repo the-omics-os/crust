@@ -19,8 +19,6 @@ type demoModel struct {
 func newDemoModel() demoModel {
 	return demoModel{
 		browser: ontologybrowser.New(
-			ontologybrowser.WithWidth(96),
-			ontologybrowser.WithHeight(28),
 			ontologybrowser.WithRoots([]ontologybrowser.OntologyNode{
 				{ID: "GO:0008150", Name: "biological_process", Description: "Processes carried out by integrated living units."},
 				{ID: "GO:0003674", Name: "molecular_function", Description: "Activities performed at the molecular level."},
@@ -63,10 +61,7 @@ func (m demoModel) View() tea.View {
 		return tea.NewView(m.result + "\n")
 	}
 
-	return tea.NewView(
-		m.browser.Render() +
-			"\n\nDemo data is local. Expand with right/enter, search with /, submit with enter, quit with q.\n",
-	)
+	return tea.NewView(m.browser.Render())
 }
 
 func demoChildren(nodeID string) []ontologybrowser.OntologyNode {
@@ -105,7 +100,7 @@ func demoChildren(nodeID string) []ontologybrowser.OntologyNode {
 }
 
 func main() {
-	program := tea.NewProgram(newDemoModel(), tea.WithWindowSize(96, 28))
+	program := tea.NewProgram(newDemoModel())
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

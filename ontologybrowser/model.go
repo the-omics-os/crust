@@ -63,7 +63,6 @@ type Model struct {
 
 	searchResults []searchResult
 	searchIndex   int
-	searchOffset  int
 
 	expanded map[string]bool
 	loading  map[string]bool
@@ -95,8 +94,8 @@ func New(opts ...Option) Model {
 	}
 
 	m.roots = normalizeNodes(m.roots, 0)
-	m.syncLayout()
 	m.rebuild()
+	m.syncLayout()
 	return m
 }
 
@@ -130,12 +129,15 @@ func (m Model) Render() string {
 // SetRoots replaces the root ontology nodes.
 func (m *Model) SetRoots(nodes []OntologyNode) {
 	m.roots = normalizeNodes(cloneNodes(nodes), 0)
+	m.searchQuery = ""
+	m.activePane = paneTree
 	m.expanded = map[string]bool{}
 	m.loading = map[string]bool{}
 	m.selectedIndex = 0
 	m.searchIndex = 0
-	m.searchOffset = 0
+	m.searchResults = nil
 	m.rebuild()
+	m.syncLayout()
 }
 
 // SetChildren attaches loaded children to a node.
@@ -203,14 +205,18 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, cancelCmd()
 	case "esc":
-		if m.helpVisible {
+		switch {
+		case m.helpVisible:
 			m.helpVisible = false
 			return m, nil
-		}
-		if m.activePane == paneSearch {
+		case strings.TrimSpace(m.searchQuery) != "":
+			m.clearSearch()
+			return m, nil
+		case m.activePane == paneSearch:
 			return m.focusTree()
+		default:
+			return m, cancelCmd()
 		}
-		return m, cancelCmd()
 	}
 
 	if m.helpVisible {
@@ -224,9 +230,13 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.focusTree()
 	case "/":
-		if m.activePane == paneTree {
-			return m.focusSearch()
-		}
+		return m.focusSearch()
+	}
+
+	if m.activePane == paneTree && shouldStartSearch(msg) {
+		m.activePane = paneSearch
+		m.setSearchQuery(m.searchQuery + msg.Text)
+		return m, nil
 	}
 
 	if m.activePane == paneSearch {
@@ -236,12 +246,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) focusSearch() (tea.Model, tea.Cmd) {
-	if m.activePane == paneSearch {
-		return m, nil
-	}
-
 	m.activePane = paneSearch
-	m.rebuildSearchResults()
+	m.refreshSearchResults()
+	m.syncSelectionToSearch()
 	return m, nil
 }
 
@@ -252,36 +259,6 @@ func (m Model) focusTree() (tea.Model, tea.Cmd) {
 
 func (m Model) updateSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "up":
-		if len(m.searchResults) == 0 {
-			return m, nil
-		}
-		if m.searchIndex > 0 {
-			m.searchIndex--
-			m.syncSearchOffset()
-			m.selectNodeByID(m.searchResults[m.searchIndex].NodeID)
-		}
-		return m, nil
-	case "down":
-		if len(m.searchResults) == 0 {
-			return m, nil
-		}
-		if m.searchIndex < len(m.searchResults)-1 {
-			m.searchIndex++
-			m.syncSearchOffset()
-			m.selectNodeByID(m.searchResults[m.searchIndex].NodeID)
-		}
-		return m, nil
-	case "enter":
-		if len(m.searchResults) == 0 || m.searchIndex >= len(m.searchResults) {
-			return m, nil
-		}
-		nodeID := m.searchResults[m.searchIndex].NodeID
-		node := findNodeByID(m.roots, nodeID)
-		if node == nil {
-			return m, nil
-		}
-		return m, submitNodeCmd(*node, pathToNode(m.roots, nodeID))
 	case "backspace", "ctrl+h":
 		m.setSearchQuery(trimLastRune(m.searchQuery))
 		return m, nil
@@ -291,12 +268,48 @@ func (m Model) updateSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u":
 		m.setSearchQuery("")
 		return m, nil
+	case "up":
+		if m.hasSearchResults() {
+			m.moveSearchIndex(-1)
+			return m, nil
+		}
+	case "down":
+		if m.hasSearchResults() {
+			m.moveSearchIndex(1)
+			return m, nil
+		}
+	case "home":
+		if m.hasSearchResults() {
+			m.searchIndex = 0
+			m.syncSelectionToSearch()
+			return m, nil
+		}
+	case "end":
+		if m.hasSearchResults() {
+			m.searchIndex = len(m.searchResults) - 1
+			m.syncSelectionToSearch()
+			return m, nil
+		}
+	case "pgup":
+		if m.hasSearchResults() {
+			m.moveSearchIndex(-5)
+			return m, nil
+		}
+	case "pgdown":
+		if m.hasSearchResults() {
+			m.moveSearchIndex(5)
+			return m, nil
+		}
+	case "enter":
+		return m.submitCurrent()
 	}
 
-	if msg.Text != "" {
+	if shouldStartSearch(msg) {
 		m.setSearchQuery(m.searchQuery + msg.Text)
+		return m, nil
 	}
-	return m, nil
+
+	return m.updateTreeKey(msg)
 }
 
 func (m Model) updateTreeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -315,38 +328,53 @@ func (m Model) updateTreeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.selectIndex(m.selectedIndex + maxInt(1, m.viewport.Height()-1))
 	case "left":
 		m.collapseOrSelectParent()
-	case "right", "enter":
-		return m.expandOrSelectCurrent()
+	case "right":
+		return m.expandCurrent()
+	case " ":
+		return m.toggleCurrentBranch()
+	case "enter":
+		return m.submitCurrent()
 	}
 	return m, nil
 }
 
-func (m Model) expandOrSelectCurrent() (tea.Model, tea.Cmd) {
+func (m Model) expandCurrent() (tea.Model, tea.Cmd) {
 	node := m.currentNode()
-	if node == nil {
-		return m, nil
-	}
-
-	if m.loading[node.ID] {
+	if node == nil || m.loading[node.ID] {
 		return m, nil
 	}
 
 	if node.Loaded && len(node.Children) == 0 {
-		return m, submitNodeCmd(*node, pathToNode(m.roots, node.ID))
+		return m, nil
 	}
 
 	if node.Loaded && len(node.Children) > 0 {
 		if !m.expanded[node.ID] {
 			m.expanded[node.ID] = true
-			m.rebuild()
+			m.refreshVisible(node.ID)
 		}
 		return m, nil
 	}
 
 	m.expanded[node.ID] = true
 	m.loading[node.ID] = true
-	m.rebuild()
+	m.refreshVisible(node.ID)
 	return m, expandCmd(node.ID)
+}
+
+func (m Model) toggleCurrentBranch() (tea.Model, tea.Cmd) {
+	node := m.currentNode()
+	if node == nil || m.loading[node.ID] {
+		return m, nil
+	}
+
+	if m.expanded[node.ID] {
+		delete(m.expanded, node.ID)
+		m.refreshVisible(node.ID)
+		return m, nil
+	}
+
+	return m.expandCurrent()
 }
 
 func (m *Model) collapseOrSelectParent() {
@@ -358,7 +386,7 @@ func (m *Model) collapseOrSelectParent() {
 	if m.expanded[node.ID] {
 		delete(m.expanded, node.ID)
 		delete(m.loading, node.ID)
-		m.rebuild()
+		m.refreshVisible(node.ID)
 		return
 	}
 
@@ -368,11 +396,22 @@ func (m *Model) collapseOrSelectParent() {
 	}
 }
 
+func (m Model) submitCurrent() (tea.Model, tea.Cmd) {
+	node := m.currentNode()
+	if node == nil {
+		return m, nil
+	}
+	return m, submitNodeCmd(*node, pathToNode(m.roots, node.ID))
+}
+
 func (m *Model) selectIndex(index int) {
 	if len(m.visible) == 0 {
 		m.selectedIndex = 0
+		m.refreshTreeViewport()
 		return
 	}
+
+	prev := m.selectedIndex
 	if index < 0 {
 		index = 0
 	}
@@ -380,6 +419,10 @@ func (m *Model) selectIndex(index int) {
 		index = len(m.visible) - 1
 	}
 	m.selectedIndex = index
+	if prev != m.selectedIndex {
+		m.refreshTreeViewport()
+		return
+	}
 	m.viewport.EnsureVisible(m.selectedIndex, 0, 0)
 }
 
@@ -396,6 +439,14 @@ func (m Model) currentNode() *OntologyNode {
 	return findNodeByID(m.roots, m.visible[m.selectedIndex].NodeID)
 }
 
+func (m Model) currentNodeID() string {
+	node := m.currentNode()
+	if node == nil {
+		return ""
+	}
+	return node.ID
+}
+
 func (m Model) visibleIndex(nodeID string) int {
 	for i, entry := range m.visible {
 		if entry.NodeID == nodeID {
@@ -408,45 +459,40 @@ func (m Model) visibleIndex(nodeID string) int {
 func (m *Model) syncLayout() {
 	width := maxInt(m.width, minWidth)
 	height := maxInt(m.height, minHeight)
-	treeHeight, _ := m.layoutHeights()
+	m.width = width
+	m.height = height
+
+	treeHeight := m.layoutTreeHeight(width, height)
 	innerWidth := maxInt(width-4, 24)
 
 	m.viewport.SetWidth(innerWidth)
 	m.viewport.SetHeight(treeHeight)
 	m.refreshTreeViewport()
-
-	m.width = width
-	m.height = height
 }
 
-func (m Model) layoutHeights() (treeHeight int, searchLines int) {
-	height := maxInt(m.height, minHeight)
+func (m Model) layoutTreeHeight(width, height int) int {
+	fixed := lipgloss.Height(m.renderHeader(width)) +
+		lipgloss.Height(m.renderInspectorPane(width)) +
+		lipgloss.Height(m.renderFooter(width))
 
-	switch {
-	case height >= 28:
-		searchLines = 6
-	case height >= 22:
-		searchLines = 5
-	default:
-		searchLines = 3
+	treeHeight := height - fixed - 3
+	if treeHeight < 4 {
+		treeHeight = 4
 	}
-
-	treeHeight = height - searchLines - 11
-	if treeHeight < 5 {
-		treeHeight = 5
-	}
-	return treeHeight, searchLines
+	return treeHeight
 }
 
 func (m *Model) rebuild() {
-	selectedID := ""
-	if node := m.currentNode(); node != nil {
-		selectedID = node.ID
-	}
+	selectedID := m.currentNodeID()
+	m.refreshVisible(selectedID)
+	m.refreshSearchResults()
+	m.syncSelectionToSearch()
+}
 
+func (m *Model) refreshVisible(preferredID string) {
 	m.visible = flattenVisibleNodes(m.roots, m.expanded)
-	if selectedID != "" {
-		if idx := m.visibleIndex(selectedID); idx >= 0 {
+	if preferredID != "" {
+		if idx := m.visibleIndex(preferredID); idx >= 0 {
 			m.selectedIndex = idx
 		}
 	}
@@ -455,26 +501,19 @@ func (m *Model) rebuild() {
 	} else if m.selectedIndex >= len(m.visible) {
 		m.selectedIndex = len(m.visible) - 1
 	}
-
 	m.refreshTreeViewport()
-	m.rebuildSearchResults()
 }
 
-func (m *Model) rebuildSearchResults() {
+func (m *Model) refreshSearchResults() {
 	currentResultID := ""
 	if len(m.searchResults) > 0 && m.searchIndex >= 0 && m.searchIndex < len(m.searchResults) {
 		currentResultID = m.searchResults[m.searchIndex].NodeID
 	}
 
-	m.searchResults = searchVisibleNodes(
-		m.searchQuery,
-		m.visible,
-		func(id string) *OntologyNode { return findNodeByID(m.roots, id) },
-	)
+	m.searchResults = searchKnownNodes(m.searchQuery, m.roots)
 
 	if len(m.searchResults) == 0 {
 		m.searchIndex = 0
-		m.searchOffset = 0
 		return
 	}
 
@@ -484,11 +523,6 @@ func (m *Model) rebuildSearchResults() {
 		m.searchIndex = len(m.searchResults) - 1
 	} else if m.searchIndex < 0 {
 		m.searchIndex = 0
-	}
-
-	m.syncSearchOffset()
-	if m.activePane == paneSearch {
-		m.selectNodeByID(m.searchResults[m.searchIndex].NodeID)
 	}
 }
 
@@ -501,26 +535,61 @@ func (m *Model) searchResultIndex(nodeID string) int {
 	return -1
 }
 
-func (m *Model) syncSearchOffset() {
-	_, visibleLines := m.layoutHeights()
-	if len(m.searchResults) <= visibleLines {
-		m.searchOffset = 0
+func (m Model) hasSearchResults() bool {
+	return strings.TrimSpace(m.searchQuery) != "" && len(m.searchResults) > 0
+}
+
+func (m *Model) moveSearchIndex(delta int) {
+	if len(m.searchResults) == 0 {
 		return
 	}
 
-	if m.searchIndex < m.searchOffset {
-		m.searchOffset = m.searchIndex
+	next := m.searchIndex + delta
+	if next < 0 {
+		next = 0
 	}
-	if m.searchIndex >= m.searchOffset+visibleLines {
-		m.searchOffset = m.searchIndex - visibleLines + 1
+	if next >= len(m.searchResults) {
+		next = len(m.searchResults) - 1
 	}
-	maxOffset := len(m.searchResults) - visibleLines
-	if m.searchOffset > maxOffset {
-		m.searchOffset = maxOffset
+	m.searchIndex = next
+	m.syncSelectionToSearch()
+}
+
+func (m *Model) syncSelectionToSearch() {
+	if strings.TrimSpace(m.searchQuery) == "" || len(m.searchResults) == 0 {
+		return
 	}
-	if m.searchOffset < 0 {
-		m.searchOffset = 0
+
+	nodeID := m.searchResults[m.searchIndex].NodeID
+	changed := m.expandPathToNode(nodeID)
+	if changed {
+		m.refreshVisible(nodeID)
+		return
 	}
+	m.selectNodeByID(nodeID)
+}
+
+func (m *Model) expandPathToNode(nodeID string) bool {
+	path := pathToNode(m.roots, nodeID)
+	if len(path) < 2 {
+		return false
+	}
+
+	changed := false
+	for _, node := range path[:len(path)-1] {
+		if !m.expanded[node.ID] {
+			m.expanded[node.ID] = true
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (m *Model) clearSearch() {
+	m.searchQuery = ""
+	m.searchResults = nil
+	m.searchIndex = 0
+	m.activePane = paneTree
 }
 
 func (m *Model) refreshTreeViewport() {
@@ -565,7 +634,7 @@ func (m Model) render() string {
 		lipgloss.Left,
 		m.renderHeader(width),
 		m.renderTreePane(width),
-		m.renderSearchPane(width),
+		m.renderInspectorPane(width),
 		m.renderFooter(width),
 	)
 }
@@ -573,60 +642,41 @@ func (m Model) render() string {
 func (m Model) renderHeader(width int) string {
 	titleStyle := lipgloss.NewStyle().Foreground(m.theme.Title).Bold(true)
 	metaStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	filterHintStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
 
-	active := "tree"
-	if m.activePane == paneSearch {
-		active = "search"
-	}
-
-	meta := fmt.Sprintf(
-		"Active: %s  Visible: %d  Known: %d",
-		active,
-		len(m.visible),
-		countNodes(m.roots),
-	)
-	if query := strings.TrimSpace(m.searchQuery); query != "" {
-		meta += fmt.Sprintf("  Query: %q", query)
+	var meta string
+	switch {
+	case strings.TrimSpace(m.searchQuery) != "" && len(m.searchResults) > 0:
+		meta = fmt.Sprintf(
+			"Filter %q across %d loaded terms  •  showing %d/%d",
+			m.searchQuery,
+			countNodes(m.roots),
+			m.searchIndex+1,
+			len(m.searchResults),
+		)
+	case strings.TrimSpace(m.searchQuery) != "":
+		meta = fmt.Sprintf("Filter %q across %d loaded terms  •  no matches yet", m.searchQuery, countNodes(m.roots))
+	default:
+		meta = fmt.Sprintf(
+			"Browsing %d loaded terms  •  %d branches open",
+			countNodes(m.roots),
+			len(m.expanded),
+		)
 	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Width(width).Render("Ontology Browser"),
 		metaStyle.Width(width).Render(meta),
+		filterHintStyle.Width(width).Render(m.renderSearchInput()),
 	)
-}
-
-func (m Model) renderTreePane(width int) string {
-	title := fmt.Sprintf("Tree  %d visible nodes", len(m.visible))
-	if len(m.loading) > 0 {
-		title += fmt.Sprintf("  %d loading", len(m.loading))
-	}
-	return m.renderPane(title, m.viewport.View(), m.activePane == paneTree, width)
-}
-
-func (m Model) renderSearchPane(width int) string {
-	_, resultLines := m.layoutHeights()
-
-	title := "Search"
-	if query := strings.TrimSpace(m.searchQuery); query != "" {
-		title += fmt.Sprintf("  %d matches", len(m.searchResults))
-	} else {
-		title += "  visible nodes only"
-	}
-
-	body := lipgloss.JoinVertical(
-		lipgloss.Left,
-		m.renderSearchInput(),
-		lipgloss.JoinVertical(lipgloss.Left, m.renderSearchLines(resultLines)...),
-	)
-	return m.renderPane(title, body, m.activePane == paneSearch, width)
 }
 
 func (m Model) renderSearchInput() string {
-	prompt := lipgloss.NewStyle().Foreground(m.theme.SearchHighlight).Bold(true).Render("Search> ")
+	prompt := lipgloss.NewStyle().Foreground(m.theme.SearchHighlight).Bold(true).Render("Filter> ")
 	placeholder := lipgloss.NewStyle().
 		Foreground(m.theme.TextMuted).
-		Render("Filter visible nodes by ID, name, or description")
+		Render("Type to filter loaded terms")
 	text := lipgloss.NewStyle().Foreground(m.theme.Text)
 
 	if m.searchQuery == "" {
@@ -644,54 +694,104 @@ func (m Model) renderSearchInput() string {
 	return rendered
 }
 
-func (m Model) renderSearchLines(limit int) []string {
-	muted := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+func (m Model) renderTreePane(width int) string {
+	title := "Tree"
+	if node := m.currentNode(); node != nil {
+		title += fmt.Sprintf("  current: %s", node.ID)
+	}
+	return m.renderPane(title, m.viewport.View(), true, width)
+}
+
+func (m Model) renderInspectorPane(width int) string {
+	node := m.currentNode()
+	if node == nil {
+		body := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("No node selected.")
+		return m.renderPane("Inspect", body, false, width)
+	}
+
+	title := lipgloss.NewStyle().Foreground(m.theme.Title).Bold(true)
 	text := lipgloss.NewStyle().Foreground(m.theme.Text)
-	idStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
-	highlight := lipgloss.NewStyle().Foreground(m.theme.SearchHighlight).Bold(true)
-	selectedMarker := lipgloss.NewStyle().Foreground(m.theme.Selected).Bold(true)
+	muted := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
 
-	if limit <= 0 {
-		return nil
+	description := strings.TrimSpace(node.Description)
+	if description == "" {
+		description = "No description available for this term."
 	}
 
-	var lines []string
-	token := searchHighlightToken(m.searchQuery)
+	bodyLines := []string{
+		title.Render(fmt.Sprintf("%s  %s", node.ID, node.Name)),
+	}
 
-	switch {
-	case strings.TrimSpace(m.searchQuery) == "":
-		lines = append(lines,
-			muted.Render("Type to filter currently visible nodes."),
-			muted.Render("Search does not fetch hidden or unloaded children."),
+	if m.height < 20 {
+		bodyLines = append(bodyLines,
+			text.Render(truncateText(description, width-4)),
+			muted.Render(truncateText(nodeStatus(*node), width-4)),
 		)
-	case len(m.searchResults) == 0:
-		lines = append(lines, muted.Render("No visible nodes match the current query."))
-	default:
-		end := minInt(len(m.searchResults), m.searchOffset+limit)
-		for i := m.searchOffset; i < end; i++ {
-			result := m.searchResults[i]
-			node := findNodeByID(m.roots, result.NodeID)
-			if node == nil {
-				continue
-			}
-
-			marker := "  "
-			if i == m.searchIndex {
-				marker = selectedMarker.Render("› ")
-			}
-
-			line := marker +
-				highlightMatch(node.ID, token, idStyle, highlight) +
-				" " +
-				highlightMatch(node.Name, token, text, highlight)
-			lines = append(lines, line)
-		}
+	} else {
+		bodyLines = append(bodyLines,
+			text.Render(truncateText(description, width-4)),
+			muted.Render(truncateText(nodeStatus(*node), width-4)),
+			muted.Render(truncateText("Path: "+strings.Join(pathLabels(pathToNode(m.roots, node.ID)), " / "), width-4)),
+		)
 	}
 
-	for len(lines) < limit {
-		lines = append(lines, "")
+	body := lipgloss.JoinVertical(lipgloss.Left, bodyLines...)
+	return m.renderPane("Inspect", body, false, width)
+}
+
+func (m Model) renderFooter(width int) string {
+	hint := "Arrows move • Right expands • Left collapses • Enter selects • Type filters • ? help"
+	if m.activePane == paneSearch {
+		hint = "Typing refines filter • Up/Down steps matches • Enter selects • Esc clears • Tab returns"
 	}
-	return lines
+
+	legend := m.renderLegend(width)
+	hintLine := lipgloss.NewStyle().
+		Foreground(m.theme.TextMuted).
+		Render(truncateText(hint, width))
+
+	return lipgloss.JoinVertical(lipgloss.Left, hintLine, legend)
+}
+
+func (m Model) renderHelp(width int) string {
+	text := lipgloss.NewStyle().Foreground(m.theme.Text)
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		text.Render("Up/Down: move through the visible tree"),
+		text.Render("Right: expand the current branch or ask the host to load its children"),
+		text.Render("Left: collapse the current branch or move to its parent"),
+		text.Render("Enter: confirm the currently highlighted term"),
+		text.Render("Type or /: start filtering loaded terms immediately"),
+		text.Render("Esc: clear the filter, return to browse, or cancel the browser"),
+		text.Render("Tab: switch between browse and filter focus"),
+		text.Render("Space: toggle the current branch open or closed"),
+		"",
+		text.Render("Legend"),
+		m.renderLegend(width-4),
+	)
+	return m.renderPane("Help", body, false, width)
+}
+
+func (m Model) renderLegend(width int) string {
+	selected := lipgloss.NewStyle().Foreground(m.theme.Selected).Bold(true).Render("› selected")
+	closed := lipgloss.NewStyle().Foreground(m.theme.Collapsed).Render("▸ branch")
+	open := lipgloss.NewStyle().Foreground(m.theme.Expanded).Render("▾ open")
+	leaf := lipgloss.NewStyle().Foreground(m.theme.Leaf).Render("• leaf")
+	loading := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("… loading")
+	match := lipgloss.NewStyle().Foreground(m.theme.SearchHighlight).Bold(true).Render("match")
+	context := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("dim = context")
+
+	legend := strings.Join([]string{
+		selected,
+		closed,
+		open,
+		leaf,
+		loading,
+		match,
+		context,
+	}, "  ")
+
+	return truncateANSI(legend, width)
 }
 
 func (m Model) renderPane(title, body string, active bool, width int) string {
@@ -714,54 +814,10 @@ func (m Model) renderPane(title, body string, active bool, width int) string {
 	))
 }
 
-func (m Model) renderFooter(width int) string {
-	node := m.currentNode()
-	if node == nil {
-		return lipgloss.NewStyle().
-			Foreground(m.theme.TextMuted).
-			Width(width).
-			Render("No node selected.")
-	}
-
-	title := lipgloss.NewStyle().Foreground(m.theme.Title).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Width(width)
-	text := lipgloss.NewStyle().Foreground(m.theme.Text).Width(width)
-
-	description := strings.TrimSpace(node.Description)
-	if description == "" {
-		description = "No description available for the current node."
-	}
-
-	path := pathLabels(pathToNode(m.roots, node.ID))
-	footerLines := []string{
-		title.Render(fmt.Sprintf("Selected: %s %s", node.ID, node.Name)),
-		text.Render(description),
-	}
-	if len(path) > 0 {
-		footerLines = append(footerLines, muted.Render("Path: "+strings.Join(path, " / ")))
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, footerLines...)
-}
-
-func (m Model) renderHelp(width int) string {
-	text := lipgloss.NewStyle().Foreground(m.theme.Text)
-	body := lipgloss.JoinVertical(
-		lipgloss.Left,
-		text.Render("Up/Down: move through visible nodes"),
-		text.Render("Right or Enter: expand node, or fetch children if not loaded"),
-		text.Render("Left: collapse the current branch or move to the parent"),
-		text.Render("Tab or /: move focus into the search pane"),
-		text.Render("Enter in search: submit the highlighted match"),
-		text.Render("Esc: leave help, leave search, or cancel the browser"),
-		text.Render("?: toggle this help screen"),
-	)
-	return m.renderPane("Help", body, false, width)
-}
-
 func (m Model) renderTreeLine(node OntologyNode, selected bool) string {
 	indent := strings.Repeat("  ", node.Depth)
-	icon, iconColor := m.nodeGlyph(node)
+	token := searchHighlightToken(m.searchQuery)
+	matched := nodeMatchesQuery(node, m.searchQuery)
 
 	marker := "  "
 	if selected {
@@ -773,17 +829,30 @@ func (m Model) renderTreeLine(node OntologyNode, selected bool) string {
 	if node.Loaded && len(node.Children) == 0 {
 		nameColor = m.theme.Leaf
 	}
+	if strings.TrimSpace(m.searchQuery) != "" && !matched && !selected {
+		nameColor = m.theme.TextMuted
+	}
 	nameStyle := lipgloss.NewStyle().Foreground(nameColor)
+
+	icon, iconColor := m.nodeGlyph(node)
+	if strings.TrimSpace(m.searchQuery) != "" && matched {
+		iconColor = m.theme.SearchHighlight
+	}
 	iconStyle := lipgloss.NewStyle().Foreground(iconColor)
+
+	searchStyle := lipgloss.NewStyle().Foreground(m.theme.SearchHighlight).Bold(true)
 	statusStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+
+	idRendered := highlightMatch(node.ID, token, idStyle, searchStyle)
+	nameRendered := highlightMatch(node.Name, token, nameStyle, searchStyle)
 
 	line := marker +
 		indent +
 		iconStyle.Render(icon) +
 		" " +
-		idStyle.Render(node.ID)
+		idRendered
 	if node.Name != "" {
-		line += " " + nameStyle.Render(node.Name)
+		line += " " + nameRendered
 	}
 	if m.loading[node.ID] {
 		line += " " + statusStyle.Render("(loading)")
@@ -860,7 +929,8 @@ func maxInt(a, b int) int {
 
 func (m *Model) setSearchQuery(query string) {
 	m.searchQuery = truncateRunes(query, searchCharCap)
-	m.rebuildSearchResults()
+	m.refreshSearchResults()
+	m.syncSelectionToSearch()
 }
 
 func truncateRunes(s string, max int) string {
@@ -889,4 +959,76 @@ func trimLastWord(s string) string {
 		i--
 	}
 	return string(runes[:i])
+}
+
+func shouldStartSearch(msg tea.KeyPressMsg) bool {
+	if strings.TrimSpace(msg.Text) == "" {
+		return false
+	}
+	for _, r := range msg.Text {
+		if unicode.IsGraphic(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeMatchesQuery(node OntologyNode, query string) bool {
+	_, ok := scoreSearch(node, query)
+	return ok
+}
+
+func nodeStatus(node OntologyNode) string {
+	switch {
+	case !node.Loaded:
+		return "Children are not loaded yet. Press Right to reveal more structure."
+	case len(node.Children) == 0:
+		return "Leaf term. Press Enter to choose it."
+	default:
+		return fmt.Sprintf("Branch with %d loaded children. Press Right to open it or Left to collapse upward.", len(node.Children))
+	}
+}
+
+func truncateText(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= width {
+		return s
+	}
+	if width <= 1 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
+}
+
+func truncateANSI(s string, width int) string {
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+
+	var out strings.Builder
+	current := 0
+	inANSI := false
+	for _, r := range s {
+		switch {
+		case r == '\x1b':
+			inANSI = true
+			out.WriteRune(r)
+		case inANSI:
+			out.WriteRune(r)
+			if r == 'm' {
+				inANSI = false
+			}
+		default:
+			if current >= width-1 {
+				out.WriteRune('…')
+				return out.String()
+			}
+			out.WriteRune(r)
+			current++
+		}
+	}
+	return out.String()
 }

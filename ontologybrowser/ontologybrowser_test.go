@@ -1,6 +1,7 @@
 package ontologybrowser
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -47,13 +48,15 @@ func typeQuery(t *testing.T, m Model, query string) Model {
 	t.Helper()
 
 	for _, r := range query {
-		updated, cmd := m.Update(tea.KeyPressMsg{Text: string(r), Code: r})
-		if cmd != nil {
-			cmd()
-		}
+		updated, _ := m.Update(tea.KeyPressMsg{Text: string(r), Code: r})
 		m = updated.(Model)
 	}
 	return m
+}
+
+func stripANSI(s string) string {
+	ansiRE := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return ansiRE.ReplaceAllString(s, "")
 }
 
 func TestNewDefaults(t *testing.T) {
@@ -98,34 +101,15 @@ func TestExpandUnloadedNodeEmitsExpandMsg(t *testing.T) {
 	}
 }
 
-func TestSetChildrenAndLeafSubmit(t *testing.T) {
+func TestEnterSelectsCurrentBranchInsteadOfExpanding(t *testing.T) {
 	m := New(WithRoots(sampleRoots()))
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if cmd == nil {
-		t.Fatal("expected expand cmd")
-	}
-	_ = cmd()
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(Model)
 
-	m.SetChildren("GO:0008150", []OntologyNode{
-		{
-			ID:          "GO:0044237",
-			Name:        "cellular metabolic process",
-			Description: "Metabolic processes carried out at the cellular level.",
-			Loaded:      true,
-		},
-	})
-
-	if len(m.visible) != 3 {
-		t.Fatalf("expected 3 visible nodes after loading children, got %d", len(m.visible))
-	}
-
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m = updated.(Model)
-	updated, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("expected submit cmd for loaded leaf")
+		t.Fatal("expected submit cmd on enter")
 	}
 
 	msg := cmd()
@@ -133,11 +117,75 @@ func TestSetChildrenAndLeafSubmit(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected crust.SubmitMsg, got %T", msg)
 	}
-	if submit.Component != componentName {
-		t.Fatalf("expected component %q, got %q", componentName, submit.Component)
+	if submit.Data["id"] != "GO:0003674" {
+		t.Fatalf("expected selected branch GO:0003674, got %v", submit.Data["id"])
 	}
-	if submit.Data["id"] != "GO:0044237" {
-		t.Fatalf("expected selected child id, got %v", submit.Data["id"])
+
+	got := updated.(Model)
+	if got.expanded["GO:0003674"] {
+		t.Fatal("expected enter not to expand the branch")
+	}
+}
+
+func TestTypingStartsFilterAndRevealsCollapsedLoadedDescendant(t *testing.T) {
+	m := New(WithRoots(sampleRoots()))
+	m = typeQuery(t, m, "bind")
+
+	if m.activePane != paneSearch {
+		t.Fatal("expected typing from tree to enter filter mode")
+	}
+	if m.searchQuery != "bind" {
+		t.Fatalf("expected search query 'bind', got %q", m.searchQuery)
+	}
+	if len(m.searchResults) != 1 {
+		t.Fatalf("expected 1 search result, got %d", len(m.searchResults))
+	}
+	if !m.expanded["GO:0003674"] {
+		t.Fatal("expected matching path to expand automatically")
+	}
+
+	selected := m.Selected()
+	if selected == nil || selected.ID != "GO:0005488" {
+		t.Fatalf("expected binding selected, got %+v", selected)
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected submit cmd from filtered selection")
+	}
+	msg := cmd()
+	submit, ok := msg.(crust.SubmitMsg)
+	if !ok {
+		t.Fatalf("expected crust.SubmitMsg, got %T", msg)
+	}
+	if submit.Data["id"] != "GO:0005488" {
+		t.Fatalf("expected binding node selected, got %v", submit.Data["id"])
+	}
+}
+
+func TestEscClearsFilterThenCancels(t *testing.T) {
+	m := New(WithRoots(sampleRoots()))
+	m = typeQuery(t, m, "bind")
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatal("did not expect cancel while clearing filter")
+	}
+	m = updated.(Model)
+	if m.searchQuery != "" {
+		t.Fatalf("expected filter to clear, got %q", m.searchQuery)
+	}
+	if m.activePane != paneTree {
+		t.Fatal("expected to return to browse mode after clearing filter")
+	}
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected cancel cmd after filter is cleared")
+	}
+	msg := cmd()
+	if _, ok := msg.(crust.CancelMsg); !ok {
+		t.Fatalf("expected crust.CancelMsg, got %T", msg)
 	}
 }
 
@@ -172,70 +220,6 @@ func TestLeftNavigatesToParentAndCollapses(t *testing.T) {
 	}
 }
 
-func TestSearchFocusAndSubmit(t *testing.T) {
-	m := New(WithRoots(sampleRoots()))
-
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	m = updated.(Model)
-
-	updated, _ = m.Update(keyText("/"))
-	m = updated.(Model)
-
-	m = typeQuery(t, m, "bind")
-
-	if m.activePane != paneSearch {
-		t.Fatal("expected search pane active")
-	}
-	if len(m.searchResults) != 1 {
-		t.Fatalf("expected 1 search result, got %d", len(m.searchResults))
-	}
-	if selected := m.Selected(); selected == nil || selected.ID != "GO:0005488" {
-		t.Fatalf("expected search to move selection to GO:0005488, got %+v", selected)
-	}
-
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected submit cmd from search result")
-	}
-
-	msg := cmd()
-	submit, ok := msg.(crust.SubmitMsg)
-	if !ok {
-		t.Fatalf("expected crust.SubmitMsg, got %T", msg)
-	}
-	if submit.Data["id"] != "GO:0005488" {
-		t.Fatalf("expected binding node selected, got %v", submit.Data["id"])
-	}
-	_ = updated
-}
-
-func TestEscLeavesSearchThenCancels(t *testing.T) {
-	m := New(WithRoots(sampleRoots()))
-
-	updated, _ := m.Update(keyText("/"))
-	m = updated.(Model)
-
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if cmd != nil {
-		t.Fatal("did not expect cancel while leaving search")
-	}
-	m = updated.(Model)
-	if m.activePane != paneTree {
-		t.Fatal("expected focus to return to tree")
-	}
-
-	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if cmd == nil {
-		t.Fatal("expected cancel cmd from tree pane")
-	}
-	msg := cmd()
-	if _, ok := msg.(crust.CancelMsg); !ok {
-		t.Fatalf("expected crust.CancelMsg, got %T", msg)
-	}
-}
-
 func TestWithRootsMakesDefensiveCopy(t *testing.T) {
 	roots := sampleRoots()
 	m := New(WithRoots(roots))
@@ -265,22 +249,64 @@ func TestSelectedReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestRenderShowsHelpAndSearchGuidance(t *testing.T) {
+func TestRenderShowsFilterGuidanceAndHelp(t *testing.T) {
 	m := New(WithRoots(sampleRoots()), WithWidth(72), WithHeight(20))
 
 	rendered := m.Render()
-	if !strings.Contains(rendered, "Ontology Browser") {
-		t.Fatalf("expected render to contain title, got:\n%s", rendered)
+	if !strings.Contains(rendered, "Filter>") {
+		t.Fatalf("expected render to contain filter prompt, got:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "visible nodes only") {
-		t.Fatalf("expected render to contain search guidance, got:\n%s", rendered)
+	if !strings.Contains(rendered, "Type to filter loaded terms") {
+		t.Fatalf("expected render to contain filter guidance, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "selected") || !strings.Contains(rendered, "branch") {
+		t.Fatalf("expected render to contain legend text, got:\n%s", rendered)
 	}
 
 	updated, _ := m.Update(keyText("?"))
 	m = updated.(Model)
 	rendered = m.Render()
-	if !strings.Contains(rendered, "Right or Enter: expand node") {
+	if !strings.Contains(rendered, "Enter: confirm the currently highlighted term") {
 		t.Fatalf("expected help text rendered, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Legend") {
+		t.Fatalf("expected help to contain legend section, got:\n%s", rendered)
+	}
+}
+
+func TestRenderFitsRequestedHeight(t *testing.T) {
+	m := New(
+		WithRoots(sampleRoots()),
+		WithWidth(96),
+		WithHeight(28),
+	)
+
+	rendered := stripANSI(m.Render())
+	lineCount := strings.Count(rendered, "\n") + 1
+	if lineCount > 28 {
+		t.Fatalf("expected render to fit height 28, got %d lines:\n%s", lineCount, rendered)
+	}
+}
+
+func TestDownArrowRefreshesRenderedSelection(t *testing.T) {
+	m := New(WithRoots([]OntologyNode{
+		{ID: "A", Name: "alpha", Loaded: true},
+		{ID: "B", Name: "beta", Loaded: true},
+	}))
+
+	before := stripANSI(m.Render())
+	if !strings.Contains(before, "› • A alpha") {
+		t.Fatalf("expected initial selection marker on A, got:\n%s", before)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	after := stripANSI(updated.(Model).Render())
+
+	if !strings.Contains(after, "› • B beta") {
+		t.Fatalf("expected selection marker to move to B, got:\n%s", after)
+	}
+	if strings.Contains(after, "› • A alpha") {
+		t.Fatalf("expected selection marker to leave A, got:\n%s", after)
 	}
 }
 

@@ -9,32 +9,21 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-func searchVisibleNodes(query string, visible []visibleNode, lookup func(string) *OntologyNode) []searchResult {
+func searchKnownNodes(query string, roots []OntologyNode) []searchResult {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return nil
 	}
 
-	results := make([]searchResult, 0, len(visible))
-	for _, entry := range visible {
-		node := lookup(entry.NodeID)
-		if node == nil {
-			continue
-		}
-		if score, ok := scoreSearch(*node, trimmed); ok {
-			results = append(results, searchResult{
-				NodeID: node.ID,
-				Score:  score,
-			})
-		}
-	}
+	var results []searchResult
+	collectSearchResults(roots, trimmed, &results)
 
 	sort.SliceStable(results, func(i, j int) bool {
 		if results[i].Score != results[j].Score {
 			return results[i].Score > results[j].Score
 		}
-		left := lookup(results[i].NodeID)
-		right := lookup(results[j].NodeID)
+		left := findNodeByID(roots, results[i].NodeID)
+		right := findNodeByID(roots, results[j].NodeID)
 		switch {
 		case left == nil:
 			return false
@@ -47,6 +36,18 @@ func searchVisibleNodes(query string, visible []visibleNode, lookup func(string)
 	})
 
 	return results
+}
+
+func collectSearchResults(nodes []OntologyNode, query string, results *[]searchResult) {
+	for i := range nodes {
+		if score, ok := scoreSearch(nodes[i], query); ok {
+			*results = append(*results, searchResult{
+				NodeID: nodes[i].ID,
+				Score:  score,
+			})
+		}
+		collectSearchResults(nodes[i].Children, query, results)
+	}
 }
 
 func scoreSearch(node OntologyNode, query string) (int, bool) {
