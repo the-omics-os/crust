@@ -138,6 +138,40 @@ func TestArrowNavigationAndSelection(t *testing.T) {
 	}
 }
 
+func TestIntuitiveSweepAndInspectControls(t *testing.T) {
+	m := New(WithPlate(samplePlate()), WithCursor(1, 2))
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	got := updated.(Model)
+	if got.selectedRow != 1 || got.selectedCol != -1 {
+		t.Fatalf("expected row sweep on row 1, got row=%d col=%d", got.selectedRow, got.selectedCol)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	got = updated.(Model)
+	if got.selectedRow != -1 || got.selectedCol != -1 {
+		t.Fatalf("expected row sweep toggle off, got row=%d col=%d", got.selectedRow, got.selectedCol)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	got = updated.(Model)
+	if got.selectedCol != 2 || got.selectedRow != -1 {
+		t.Fatalf("expected column sweep on col 2, got row=%d col=%d", got.selectedRow, got.selectedCol)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	got = updated.(Model)
+	if !got.inspectorVisible {
+		t.Fatal("expected inspector to open on space")
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	got = updated.(Model)
+	if got.inspectorVisible {
+		t.Fatal("expected inspector to toggle closed on i")
+	}
+}
+
 func TestTabCyclesModes(t *testing.T) {
 	m := New()
 
@@ -154,6 +188,39 @@ func TestTabCyclesModes(t *testing.T) {
 	}
 }
 
+func TestHomeEndAndPageNavigation(t *testing.T) {
+	m := New(
+		WithFormat(Plate384),
+		WithCursor(8, 10),
+		WithWidth(60),
+		WithHeight(12),
+	)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyHome})
+	got := updated.(Model)
+	if got.cursorCol != 0 {
+		t.Fatalf("expected home to move to first column, got %d", got.cursorCol)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	got = updated.(Model)
+	if got.cursorCol != 23 {
+		t.Fatalf("expected end to move to last column, got %d", got.cursorCol)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	got = updated.(Model)
+	if got.cursorRow >= 8 {
+		t.Fatalf("expected pgup to move upward, got row %d", got.cursorRow)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	got = updated.(Model)
+	if got.cursorRow <= 0 {
+		t.Fatalf("expected pgdown to move downward, got row %d", got.cursorRow)
+	}
+}
+
 func TestEnterEmitsSubmitMsgAndExpandsDetail(t *testing.T) {
 	m := New(WithPlate(samplePlate()), WithCursor(1, 2))
 
@@ -163,8 +230,8 @@ func TestEnterEmitsSubmitMsgAndExpandsDetail(t *testing.T) {
 	}
 
 	got := updated.(Model)
-	if !got.detailExpanded {
-		t.Fatal("expected detail footer to expand on enter")
+	if !got.inspectorVisible {
+		t.Fatal("expected inspector to open on enter")
 	}
 
 	msg := cmd()
@@ -203,17 +270,17 @@ func TestEscClearsContextBeforeCancel(t *testing.T) {
 
 	updated, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = updated.(Model)
-	if cmd == nil || !got.detailExpanded {
-		t.Fatal("expected enter to expand detail and emit submit")
+	if cmd == nil || !got.inspectorVisible {
+		t.Fatal("expected enter to open inspector and emit submit")
 	}
 
 	updated, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got = updated.(Model)
 	if cmd != nil {
-		t.Fatal("expected esc to collapse detail without canceling")
+		t.Fatal("expected esc to close inspector without canceling")
 	}
-	if got.detailExpanded {
-		t.Fatal("expected detail to collapse on esc")
+	if got.inspectorVisible {
+		t.Fatal("expected inspector to close on esc")
 	}
 
 	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift})
@@ -253,25 +320,57 @@ func TestRenderContainsSummaryHelpAndReplicates(t *testing.T) {
 	)
 
 	view := m.Render()
-	for _, want := range []string{"Primary Screen Plate", "Cursor: B3", "[B3] Hit"} {
+	for _, want := range []string{"Primary Screen Plate", "Focus: B3", "Lenses:", "Legend:", "Raw Signal view", "Always:", "positive ctrl", "Signal:", "lowest", "highest", "space/i", "inspect"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected render to contain %q", want)
+		}
+	}
+	for _, unwanted := range []string{"┌", "└"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("expected collapsed lower band to stay single-line per segment, found %q", unwanted)
 		}
 	}
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
 	view = updated.(Model).Render()
-	if !strings.Contains(view, "Glyphs: + positive ctrl") {
+	if !strings.Contains(view, "toggle row sweep") {
 		t.Fatal("expected help text to render when help is visible")
 	}
 
-	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	view = updated.(Model).Render()
-	if !strings.Contains(view, "Replicates by reagent (BRCA1-siRNA)") {
-		t.Fatal("expected replicate summary in expanded footer")
+	for _, want := range []string{"Replicates", "BRCA1-siRNA", "Mean Z", "Metadata", "assay", "B-17"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected inspector to contain %q", want)
+		}
 	}
-	if !strings.Contains(view, "Metadata: assay=olink, batch=B-17") {
-		t.Fatal("expected metadata summary in expanded footer")
+	if strings.Contains(view, "┘ ┌") {
+		t.Fatal("expected inspector metric cards to be laid out as blocks, not concatenated raw strings")
+	}
+}
+
+func TestLegendTracksActiveLens(t *testing.T) {
+	m := New(
+		WithPlate(samplePlate()),
+		WithCursor(1, 2),
+		WithWidth(72),
+		WithHeight(16),
+		WithViewMode(ViewZScore),
+	)
+
+	view := m.Render()
+	for _, want := range []string{"Z-Score view", "Magnitude:", "near 0", "extreme", "Color:", "negative", "positive"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected z-score legend to contain %q", want)
+		}
+	}
+
+	m.SetViewMode(ViewHitClass)
+	view = m.Render()
+	for _, want := range []string{"Hit Class view", "Samples:", "#", "hit", "non-hit sample"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected hit-class legend to contain %q", want)
+		}
 	}
 }
 

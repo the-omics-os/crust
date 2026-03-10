@@ -1,6 +1,7 @@
 package platemap
 
 import (
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/the-omics-os/crust"
@@ -31,19 +32,19 @@ var allViewModes = [...]ViewMode{
 
 // Model is the Bubble Tea model for PlateMap.
 type Model struct {
-	plate          PlateData
-	mode           ViewMode
-	theme          Theme
-	width          int
-	height         int
-	cursorRow      int
-	cursorCol      int
-	rowOffset      int
-	colOffset      int
-	selectedRow    int
-	selectedCol    int
-	detailExpanded bool
-	helpVisible    bool
+	plate            PlateData
+	mode             ViewMode
+	theme            Theme
+	width            int
+	height           int
+	cursorRow        int
+	cursorCol        int
+	rowOffset        int
+	colOffset        int
+	selectedRow      int
+	selectedCol      int
+	inspectorVisible bool
+	helpVisible      bool
 }
 
 // New creates a PlateMap with the given options.
@@ -83,52 +84,65 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.normalize()
 		return m, nil
 	case tea.KeyPressMsg:
-		switch typed.String() {
-		case "up":
+		switch {
+		case key.Matches(typed, defaultKeyMap.Up):
 			m.moveCursor(-1, 0)
-		case "down":
+		case key.Matches(typed, defaultKeyMap.Down):
 			m.moveCursor(1, 0)
-		case "left":
+		case key.Matches(typed, defaultKeyMap.Left):
 			m.moveCursor(0, -1)
-		case "right":
+		case key.Matches(typed, defaultKeyMap.Right):
 			m.moveCursor(0, 1)
-		case "shift+up":
+		case key.Matches(typed, defaultKeyMap.ShiftUp):
 			m.moveCursor(-1, 0)
 			m.selectedRow = m.cursorRow
 			m.selectedCol = -1
-		case "shift+down":
+		case key.Matches(typed, defaultKeyMap.ShiftDown):
 			m.moveCursor(1, 0)
 			m.selectedRow = m.cursorRow
 			m.selectedCol = -1
-		case "shift+left":
+		case key.Matches(typed, defaultKeyMap.ShiftLeft):
 			m.moveCursor(0, -1)
 			m.selectedCol = m.cursorCol
 			m.selectedRow = -1
-		case "shift+right":
+		case key.Matches(typed, defaultKeyMap.ShiftRight):
 			m.moveCursor(0, 1)
 			m.selectedCol = m.cursorCol
 			m.selectedRow = -1
-		case "tab":
+		case key.Matches(typed, defaultKeyMap.NextLens):
 			m.mode = m.mode.next()
-		case "shift+tab":
+		case key.Matches(typed, defaultKeyMap.PrevLens):
 			m.mode = m.mode.prev()
-		case "enter":
-			m.detailExpanded = true
+		case key.Matches(typed, defaultKeyMap.Home):
+			m.moveToRowEdge(false)
+		case key.Matches(typed, defaultKeyMap.End):
+			m.moveToRowEdge(true)
+		case key.Matches(typed, defaultKeyMap.PageUp):
+			m.movePage(-1)
+		case key.Matches(typed, defaultKeyMap.PageDown):
+			m.movePage(1)
+		case key.Matches(typed, defaultKeyMap.RowSweep):
+			m.toggleRowSelection()
+		case key.Matches(typed, defaultKeyMap.ColSweep):
+			m.toggleColSelection()
+		case key.Matches(typed, defaultKeyMap.Inspect):
+			m.inspectorVisible = !m.inspectorVisible
+		case key.Matches(typed, defaultKeyMap.Confirm):
+			m.inspectorVisible = true
 			m.normalize()
 			return m, submitCmd(m.submitData())
-		case "esc":
+		case key.Matches(typed, defaultKeyMap.Back):
 			switch {
 			case m.helpVisible:
 				m.helpVisible = false
-			case m.detailExpanded:
-				m.detailExpanded = false
+			case m.inspectorVisible:
+				m.inspectorVisible = false
 			case m.selectedRow >= 0 || m.selectedCol >= 0:
-				m.selectedRow = -1
-				m.selectedCol = -1
+				m.clearSelection()
 			default:
 				return m, cancelCmd()
 			}
-		case "?":
+		case key.Matches(typed, defaultKeyMap.Help):
 			m.helpVisible = !m.helpVisible
 		default:
 			return m, nil
@@ -256,6 +270,44 @@ func (m *Model) moveCursor(deltaRow, deltaCol int) {
 	m.cursorRow = clampInt(m.cursorRow+deltaRow, 0, rows-1)
 	m.cursorCol = clampInt(m.cursorCol+deltaCol, 0, cols-1)
 	m.ensureVisible()
+}
+
+func (m *Model) movePage(direction int) {
+	visibleRows, _ := m.gridViewportSize()
+	step := maxInt(1, visibleRows-1)
+	m.moveCursor(direction*step, 0)
+}
+
+func (m *Model) moveToRowEdge(last bool) {
+	if last {
+		m.cursorCol = m.plate.Format.Cols() - 1
+	} else {
+		m.cursorCol = 0
+	}
+	m.ensureVisible()
+}
+
+func (m *Model) toggleRowSelection() {
+	if m.selectedRow == m.cursorRow && m.selectedCol == -1 {
+		m.clearSelection()
+		return
+	}
+	m.selectedRow = m.cursorRow
+	m.selectedCol = -1
+}
+
+func (m *Model) toggleColSelection() {
+	if m.selectedCol == m.cursorCol && m.selectedRow == -1 {
+		m.clearSelection()
+		return
+	}
+	m.selectedCol = m.cursorCol
+	m.selectedRow = -1
+}
+
+func (m *Model) clearSelection() {
+	m.selectedRow = -1
+	m.selectedCol = -1
 }
 
 func (m *Model) clampOffsets() {
