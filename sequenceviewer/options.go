@@ -29,30 +29,41 @@ type Theme struct {
 	Complement color.Color
 	Unknown    color.Color
 	ViewLabel  color.Color
+	Hint       color.Color
+
+	FocusForeground     color.Color
+	FocusBackground     color.Color
+	SelectionForeground color.Color
+	SelectionBackground color.Color
 }
 
 // DefaultTheme returns a scientifically conventional default palette.
 func DefaultTheme() Theme {
 	return Theme{
-		Adenine:      lipgloss.Color("34"),
-		Thymine:      lipgloss.Color("160"),
-		Guanine:      lipgloss.Color("178"),
-		Cytosine:     lipgloss.Color("33"),
-		Uracil:       lipgloss.Color("160"),
-		Hydrophobic:  lipgloss.Color("33"),
-		Positive:     lipgloss.Color("160"),
-		Negative:     lipgloss.Color("163"),
-		Polar:        lipgloss.Color("34"),
-		Aromatic:     lipgloss.Color("37"),
-		Special:      lipgloss.Color("208"),
-		GradientLow:  lipgloss.Color("39"),
-		GradientHigh: lipgloss.Color("196"),
-		LineNumber:   lipgloss.Color("240"),
-		Header:       lipgloss.Color("252"),
-		Separator:    lipgloss.Color("240"),
-		Complement:   lipgloss.Color("245"),
-		Unknown:      lipgloss.Color("240"),
-		ViewLabel:    lipgloss.Color("81"),
+		Adenine:             lipgloss.Color("34"),
+		Thymine:             lipgloss.Color("160"),
+		Guanine:             lipgloss.Color("178"),
+		Cytosine:            lipgloss.Color("33"),
+		Uracil:              lipgloss.Color("160"),
+		Hydrophobic:         lipgloss.Color("33"),
+		Positive:            lipgloss.Color("160"),
+		Negative:            lipgloss.Color("163"),
+		Polar:               lipgloss.Color("34"),
+		Aromatic:            lipgloss.Color("37"),
+		Special:             lipgloss.Color("208"),
+		GradientLow:         lipgloss.Color("39"),
+		GradientHigh:        lipgloss.Color("196"),
+		LineNumber:          lipgloss.Color("240"),
+		Header:              lipgloss.Color("252"),
+		Separator:           lipgloss.Color("240"),
+		Complement:          lipgloss.Color("245"),
+		Unknown:             lipgloss.Color("240"),
+		ViewLabel:           lipgloss.Color("81"),
+		Hint:                lipgloss.Color("244"),
+		FocusForeground:     lipgloss.Color("16"),
+		FocusBackground:     lipgloss.Color("230"),
+		SelectionForeground: lipgloss.Color("255"),
+		SelectionBackground: lipgloss.Color("238"),
 	}
 }
 
@@ -79,6 +90,11 @@ func WithResidues(residues []Residue) Option {
 // WithView sets the initial view mode.
 func WithView(v ViewMode) Option {
 	return func(m *Model) { m.view = v }
+}
+
+// WithFocus sets the initial focused residue position (1-based).
+func WithFocus(position int) Option {
+	return func(m *Model) { m.focusIndex = position - 1 }
 }
 
 // WithComplement sets the initial complement visibility.

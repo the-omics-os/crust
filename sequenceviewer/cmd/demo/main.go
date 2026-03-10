@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,31 +18,41 @@ type demoModel struct {
 }
 
 func newDNAViewer() sequenceviewer.Model {
+	sequence := strings.Repeat(
+		"ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAGGATCCGAATTCGCTAGCATGCGTACGTAGCTA",
+		4,
+	)
 	return sequenceviewer.New(
 		sequenceviewer.WithSequence(
-			"ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAGGATCCGAATTCGCTAGCATGCGTACGTAGCTA",
+			sequence,
 			sequenceviewer.DNA,
 		),
 		sequenceviewer.WithComplement(true),
 		sequenceviewer.WithGCWindow(12),
 		sequenceviewer.WithAnnotations([]sequenceviewer.Annotation{
-			{Name: "Promoter", Start: 1, End: 18, Direction: 1, Color: lipgloss.Color("81")},
-			{Name: "ORF", Start: 19, End: 63, Direction: 1, Color: lipgloss.Color("42")},
-			{Name: "EcoRI/BamHI zone", Start: 49, End: 60, Direction: 0, Color: lipgloss.Color("214")},
+			{Name: "Promoter", Start: 1, End: 42, Direction: 1, Color: lipgloss.Color("81")},
+			{Name: "ORF", Start: 43, End: 210, Direction: 1, Color: lipgloss.Color("42")},
+			{Name: "EcoRI/BamHI zone", Start: 175, End: 236, Direction: 0, Color: lipgloss.Color("214")},
+			{Name: "Terminator", Start: 250, End: 284, Direction: -1, Color: lipgloss.Color("205")},
 		}),
 	)
 }
 
 func newProteinViewer() sequenceviewer.Model {
+	sequence := strings.Repeat(
+		"MKWVTFISLLFLFSSAYSRGVFRRDTHKSEIAHRFKDLGEENFKALVLIAFAQYLQQCPFDEHVKLVNEVTEFAKTCVADESAENCDKSLHTLFGDELCKVASLRETYGEMADCCAKQEPERNECFLSHKDDSPDLPKLKPDPN",
+		3,
+	)
 	return sequenceviewer.New(
 		sequenceviewer.WithSequence(
-			"MKWVTFISLLFLFSSAYSRGVFRRDTHKSEIAHRFKDLGEENFKALVLIAFAQYLQQCPFDEHVKLVNEVTEFAKTCVADESAENCDKSLHTLFGDELCKVASLRETYGEMADCCAKQEPERNECFLSHKDDSPDLPKLKPDPN",
+			sequence,
 			sequenceviewer.Protein,
 		),
 		sequenceviewer.WithAnnotations([]sequenceviewer.Annotation{
-			{Name: "Signal peptide", Start: 1, End: 18, Direction: 1, Color: lipgloss.Color("81")},
-			{Name: "Binding region", Start: 42, End: 78, Direction: 0, Color: lipgloss.Color("205")},
-			{Name: "Cys cluster", Start: 120, End: 160, Direction: 0, Color: lipgloss.Color("42")},
+			{Name: "Signal peptide", Start: 1, End: 24, Direction: 1, Color: lipgloss.Color("81")},
+			{Name: "Binding region", Start: 42, End: 120, Direction: 0, Color: lipgloss.Color("205")},
+			{Name: "Cys cluster", Start: 120, End: 210, Direction: 0, Color: lipgloss.Color("42")},
+			{Name: "Flexible tail", Start: 260, End: 360, Direction: -1, Color: lipgloss.Color("214")},
 		}),
 	)
 }
@@ -92,7 +103,10 @@ func (m demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m demoModel) View() tea.View {
-	header := fmt.Sprintf("SequenceViewer demo | mode: %s | 1: DNA | 2: Protein | q: quit", m.mode)
+	header := fmt.Sprintf(
+		"SequenceViewer demo | mode: %s | 1 DNA | 2 Protein | Arrows move | Shift+Arrows select | [ ] feature | Tab lens | ? help+legend | q quit",
+		m.mode,
+	)
 	return tea.NewView(header + "\n\n" + m.viewer.Render())
 }
 

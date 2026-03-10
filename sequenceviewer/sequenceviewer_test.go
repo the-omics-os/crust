@@ -112,9 +112,163 @@ func TestRenderVariousWidths(t *testing.T) {
 		if !strings.Contains(rendered, "DNA Sequence") {
 			t.Fatalf("expected header at width %d, got:\n%s", width, rendered)
 		}
-		if !strings.Contains(rendered, "Tab: view") {
+		if !strings.Contains(rendered, "Left/Right residue") {
 			t.Fatalf("expected footer at width %d, got:\n%s", width, rendered)
 		}
+	}
+}
+
+func TestLeftRightMovesFocus(t *testing.T) {
+	m := New(WithSequence("ATGC", DNA))
+	if m.FocusPosition() != 1 {
+		t.Fatalf("expected initial focus at 1, got %d", m.FocusPosition())
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	got := updated.(Model)
+	if got.FocusPosition() != 2 {
+		t.Fatalf("expected focus at 2 after right, got %d", got.FocusPosition())
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	got = updated.(Model)
+	if got.FocusPosition() != 1 {
+		t.Fatalf("expected focus back at 1 after left, got %d", got.FocusPosition())
+	}
+}
+
+func TestShiftRightSelectsRange(t *testing.T) {
+	m := New(WithSequence("ATGC", DNA))
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift})
+	got := updated.(Model)
+
+	start, end, ok := got.SelectionRange()
+	if !ok {
+		t.Fatal("expected active selection after shift+right")
+	}
+	if start != 1 || end != 2 {
+		t.Fatalf("expected selection 1-2, got %d-%d", start, end)
+	}
+	if got.FocusPosition() != 2 {
+		t.Fatalf("expected focus at 2 after shift+right, got %d", got.FocusPosition())
+	}
+}
+
+func TestPlainMoveClearsSelection(t *testing.T) {
+	m := New(WithSequence("ATGC", DNA))
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift})
+	got := updated.(Model)
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	got = updated.(Model)
+	if _, _, ok := got.SelectionRange(); ok {
+		t.Fatal("expected plain movement to clear selection")
+	}
+	if got.FocusPosition() != 3 {
+		t.Fatalf("expected focus at 3 after plain right, got %d", got.FocusPosition())
+	}
+}
+
+func TestShiftDownExtendsSelectionByRow(t *testing.T) {
+	m := New(
+		WithSequence(strings.Repeat("ATGC", 20), DNA),
+		WithResiduesPerLine(8),
+	)
+	m.SetFocus(9)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift})
+	got := updated.(Model)
+
+	start, end, ok := got.SelectionRange()
+	if !ok {
+		t.Fatal("expected active selection after shift+down")
+	}
+	if start != 9 || end != 17 {
+		t.Fatalf("expected selection 9-17 after shift+down, got %d-%d", start, end)
+	}
+	if got.FocusPosition() != 17 {
+		t.Fatalf("expected focus at 17 after shift+down, got %d", got.FocusPosition())
+	}
+}
+
+func TestEscClearsSelection(t *testing.T) {
+	m := New(WithSequence("ATGC", DNA))
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift})
+	got := updated.(Model)
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	got = updated.(Model)
+	if _, _, ok := got.SelectionRange(); ok {
+		t.Fatal("expected esc to clear selection")
+	}
+	if got.FocusPosition() != 2 {
+		t.Fatalf("expected focus to remain at 2 after clearing selection, got %d", got.FocusPosition())
+	}
+}
+
+func TestUpDownMovesByRow(t *testing.T) {
+	m := New(
+		WithSequence(strings.Repeat("ATGC", 20), DNA),
+		WithResiduesPerLine(8),
+	)
+	m.SetFocus(9)
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got := updated.(Model)
+	if got.FocusPosition() != 17 {
+		t.Fatalf("expected focus at 17 after down, got %d", got.FocusPosition())
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	got = updated.(Model)
+	if got.FocusPosition() != 9 {
+		t.Fatalf("expected focus back at 9 after up, got %d", got.FocusPosition())
+	}
+}
+
+func TestAutoExpandResiduesPerLineUsesAvailableWidth(t *testing.T) {
+	m := New(
+		WithSequence(strings.Repeat("ATGC", 20), DNA),
+		WithWidth(40),
+	)
+	narrow := m.effectiveResiduesPerLine()
+
+	m.SetWidth(120)
+	wide := m.effectiveResiduesPerLine()
+
+	if wide <= narrow {
+		t.Fatalf("expected wider view to fit more residues, got narrow=%d wide=%d", narrow, wide)
+	}
+}
+
+func TestExplicitResiduesPerLinePinsLayout(t *testing.T) {
+	m := New(
+		WithSequence(strings.Repeat("ATGC", 20), DNA),
+		WithWidth(120),
+		WithResiduesPerLine(8),
+	)
+	if got := m.effectiveResiduesPerLine(); got != 8 {
+		t.Fatalf("expected explicit residues per line to stay pinned at 8, got %d", got)
+	}
+}
+
+func TestFeatureJumpMovesFocus(t *testing.T) {
+	m := New(
+		WithSequence(strings.Repeat("ATGC", 20), DNA),
+		WithAnnotations([]Annotation{
+			{Name: "A", Start: 10, End: 20},
+			{Name: "B", Start: 40, End: 50},
+		}),
+	)
+	updated, _ := m.Update(tea.KeyPressMsg{Text: "]", Code: ']'})
+	got := updated.(Model)
+	if got.FocusPosition() != 10 {
+		t.Fatalf("expected jump to first feature at 10, got %d", got.FocusPosition())
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Text: "]", Code: ']'})
+	got = updated.(Model)
+	if got.FocusPosition() != 40 {
+		t.Fatalf("expected jump to second feature at 40, got %d", got.FocusPosition())
 	}
 }
 
@@ -167,6 +321,25 @@ func TestHelpToggle(t *testing.T) {
 	rendered := stripANSI(got.Render())
 	if !strings.Contains(rendered, "Help") {
 		t.Fatalf("expected help block in render, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "highlighted residue is the focus") {
+		t.Fatalf("expected focus guidance in help, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Legend") {
+		t.Fatalf("expected legend block in help, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Features: > forward start") {
+		t.Fatalf("expected feature symbol legend in help, got:\n%s", rendered)
+	}
+}
+
+func TestHelpLegendIncludesPropertyRampOutsideIdentityView(t *testing.T) {
+	m := New(WithSequence(sampleDNA(), DNA), WithView(GCContentView))
+	updated, _ := m.Update(tea.KeyPressMsg{Text: "?", Code: '?'})
+	got := updated.(Model)
+	rendered := stripANSI(got.Render())
+	if !strings.Contains(rendered, "Property bar:") {
+		t.Fatalf("expected property legend in help for property view, got:\n%s", rendered)
 	}
 }
 

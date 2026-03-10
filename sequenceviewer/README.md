@@ -1,10 +1,10 @@
 # SequenceViewer
 
-Property-aware DNA, RNA, and protein inspection for Bubble Tea. `sequenceviewer` renders biological sequences as rich residue objects, supports view-cycled coloring, overlays feature annotations, and keeps core analyses close to the terminal interaction loop.
+Property-aware DNA, RNA, and protein inspection for Bubble Tea. `sequenceviewer` renders biological sequences as rich residue objects, keeps a focused residue under the user’s control, overlays feature annotations, and keeps core analyses close to the terminal interaction loop.
 
 ## Hero
 
-- Inline Bubble Tea component with scroll, page jump, help, and view cycling.
+- Inline Bubble Tea component with focus-based navigation, feature jumps, contextual help + legend, and view cycling.
 - DNA/RNA support includes GC window analysis, complement rendering, ORF search, restriction site detection, and Wallace-rule Tm estimation.
 - Protein support includes Clustal-style identity coloring plus hydrophobicity, charge, molecular-weight, and pI-aware views.
 - Residues carry optional 3D-oriented metadata (`Coords`, `BFactor`, `VdwRadius`, `Bonds`) so the model is ready for structure-linked consumers.
@@ -25,30 +25,37 @@ The package now includes:
 
 ## User Experience
 
-The viewer follows Crust’s shared interaction semantics:
+The viewer now revolves around one clear mental model: a focused residue.
 
-- `Up` / `Down`: scroll one line
-- `PgUp` / `PgDn`: scroll a page
-- `Home` / `End`: jump to the top or bottom
+The controls follow Crust’s shared interaction semantics, but they now act on biological structure instead of only the viewport:
+
+- `Left` / `Right`: move one residue
+- `Up` / `Down`: move one rendered row
+- `Shift` + arrow keys: extend a contiguous selection from the focused residue
+- `PgUp` / `PgDn`: move a page of rows
+- `Home` / `End`: jump to sequence start/end
+- `[` / `]`: jump to the previous/next annotated region
 - `Tab`: cycle only the views that make sense for the active sequence type
 - `c`: toggle the complement strand for DNA
-- `?`: toggle the built-in help block
+- `?`: toggle the built-in help + legend block
 
-Annotations render as an inline track above each affected sequence block, and annotated residues are emphasized directly inside the sequence line so the feature layer remains visible while you scroll.
+The highlighted residue is the anchor for the entire interface. The header reports its current properties and active biological context, and the viewport follows that focus automatically. When a selection is active, the focus stays at the live edge of that range so movement and inspection remain legible.
+
+Annotations render as an inline track above each affected sequence block, and annotated residues are emphasized directly inside the sequence line so the feature layer remains visible while you navigate. The help overlay also includes a legend for residue colors, feature symbols, focus/selection highlights, and the property glyph ramp.
 
 GIF placeholder:
-Add a navigation-focused recording here that shows scrolling, paging, and the help overlay.
+Add a navigation-focused recording here that shows residue movement, feature jumps, and the help overlay.
 
 ## Rendering Model
 
 Each rendered block is composed from the same residue slice:
 
 1. Annotation track, when the visible span intersects any feature.
-2. Primary sequence line with left/right position labels.
+2. Primary sequence line with left/right position labels and a focused residue highlight.
 3. Optional complement line for DNA.
 4. Optional per-residue property bar for non-identity views.
 
-The component automatically narrows residues-per-line when the terminal width is constrained so small terminals stay legible without horizontal wrapping.
+The component automatically fits as many residues as the available box width can support unless you explicitly pin `WithResiduesPerLine(...)`. That means narrow terminals stay legible without horizontal wrapping, and wider layouts expand to show more biological context per row. The focused residue stays in view as you move.
 
 ## Public Surface
 
@@ -56,6 +63,7 @@ The component automatically narrows residues-per-line when the terminal width is
 viewer := sequenceviewer.New(
     sequenceviewer.WithSequence("ATGCGATCGATCG", sequenceviewer.DNA),
     sequenceviewer.WithComplement(true),
+    sequenceviewer.WithFocus(7),
     sequenceviewer.WithAnnotations([]sequenceviewer.Annotation{
         {Name: "Promoter", Start: 1, End: 9, Direction: 1},
     }),
@@ -66,17 +74,17 @@ viewer := sequenceviewer.New(
 
 Primary API:
 
-- `WithSequence`, `WithResidues`, `WithView`, `WithComplement`
+- `WithSequence`, `WithResidues`, `WithView`, `WithFocus`, `WithComplement`
 - `WithAnnotations`, `WithResiduesPerLine`, `WithWidth`, `WithTheme`, `WithHeader`, `WithGCWindow`
-- `SetSequence`, `SetResidues`, `SetView`, `SetWidth`
-- `Sequence`, `Type`, `Length`, `ViewMode`, `Residues`, `ORFs`, `RestrictionSites`, `GCContent`, `MeltingTemp`, `IsoelectricPoint`
+- `SetSequence`, `SetResidues`, `SetView`, `SetFocus`, `SetWidth`
+- `Sequence`, `Type`, `Length`, `ViewMode`, `FocusPosition`, `SelectionRange`, `Residues`, `ORFs`, `RestrictionSites`, `GCContent`, `MeltingTemp`, `IsoelectricPoint`
 - `ParseFASTA` / `ParseFASTAReader`
 
 ## Validation
 
 The package was built with local tests for:
 
-- view cycling and key handling
+- focus navigation, feature jumps, and key handling
 - complement rendering and help rendering
 - width-sensitive output
 - residue property enrichment

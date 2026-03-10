@@ -108,13 +108,15 @@ func (m Model) styledResidue(residue Residue) string {
 	if annColor, ok := m.annotationColorAt(residue.Position); ok {
 		style = style.Bold(true).Underline(true).UnderlineColor(annColor)
 	}
+	style = m.decoratePositionStyle(style, residue.Position)
 	return style.Render(string(residue.Code))
 }
 
-func (m Model) styledComplement(code byte) string {
-	return lipgloss.NewStyle().
-		Foreground(m.theme.Complement).
-		Render(string(Complement(code, DNA)))
+func (m Model) styledComplementResidue(residue Residue) string {
+	style := lipgloss.NewStyle().
+		Foreground(m.theme.Complement)
+	style = m.decoratePositionStyle(style, residue.Position)
+	return style.Render(string(Complement(residue.Code, m.seqType)))
 }
 
 func (m Model) styledPropertyGlyph(residue Residue) string {
@@ -122,9 +124,39 @@ func (m Model) styledPropertyGlyph(residue Residue) string {
 	if !ok {
 		return lipgloss.NewStyle().Foreground(m.theme.Unknown).Render(" ")
 	}
-	return lipgloss.NewStyle().
-		Foreground(m.colorForResidue(residue)).
-		Render(propertyGlyph(scale))
+	style := lipgloss.NewStyle().
+		Foreground(m.colorForResidue(residue))
+	style = m.decoratePositionStyle(style, residue.Position)
+	return style.Render(propertyGlyph(scale))
+}
+
+func (m Model) isFocusPosition(position int) bool {
+	focusPosition := m.FocusPosition()
+	return focusPosition > 0 && position == focusPosition
+}
+
+func (m Model) isSelectedPosition(position int) bool {
+	start, end, ok := m.selectionPositionRange()
+	if !ok {
+		return false
+	}
+	return position >= start && position <= end
+}
+
+func (m Model) decoratePositionStyle(style lipgloss.Style, position int) lipgloss.Style {
+	switch {
+	case m.isFocusPosition(position):
+		return style.
+			Foreground(m.theme.FocusForeground).
+			Background(m.theme.FocusBackground).
+			Bold(true)
+	case m.isSelectedPosition(position):
+		return style.
+			Foreground(m.theme.SelectionForeground).
+			Background(m.theme.SelectionBackground)
+	default:
+		return style
+	}
 }
 
 func propertyGlyph(scale float64) string {
