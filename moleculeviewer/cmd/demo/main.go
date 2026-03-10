@@ -10,26 +10,6 @@ import (
 	"github.com/the-omics-os/crust/moleculeviewer"
 )
 
-type sample struct {
-	name   string
-	smiles string
-}
-
-var samples = []sample{
-	{
-		name:   "Caffeine",
-		smiles: "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
-	},
-	{
-		name:   "Aspirin",
-		smiles: "CC(=O)OC1=CC=CC=C1C(=O)O",
-	},
-	{
-		name:   "Nicotine",
-		smiles: "CN1CCC[C@H]1C2=CN=CC=C2",
-	},
-}
-
 type model struct {
 	viewer moleculeviewer.Model
 	active int
@@ -48,8 +28,7 @@ func (m *model) load(index int) {
 	m.active = index
 	m.viewer = moleculeviewer.New(
 		moleculeviewer.WithName(s.name),
-		moleculeviewer.WithSMILES(s.smiles),
-		// Let WindowSizeMsg take over after startup, but start sensible.
+		moleculeviewer.WithMolecule(loadSample(index)),
 		moleculeviewer.WithWidth(96),
 		moleculeviewer.WithHeight(26),
 	)

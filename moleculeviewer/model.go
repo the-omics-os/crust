@@ -295,8 +295,20 @@ func (m *Model) moveSelection(direction string) bool {
 	fallbackScore := math.Inf(-1)
 	targetX, targetY := directionVector(direction)
 	origin := m.molecule.Atoms[current].Coords
+	neighbors := append([]int(nil), m.molecule.Atoms[current].Neighbors...)
+	if m.molecule.Atoms[current].Symbol != "H" {
+		var heavy []int
+		for _, neighbor := range neighbors {
+			if m.molecule.Atoms[neighbor].Symbol != "H" {
+				heavy = append(heavy, neighbor)
+			}
+		}
+		if len(heavy) > 0 {
+			neighbors = heavy
+		}
+	}
 
-	for _, neighbor := range m.molecule.Atoms[current].Neighbors {
+	for _, neighbor := range neighbors {
 		coords := m.molecule.Atoms[neighbor].Coords
 		dx := coords[0] - origin[0]
 		dy := coords[1] - origin[1]

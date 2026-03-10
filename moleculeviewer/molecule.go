@@ -44,6 +44,12 @@ type FunctionalGroup struct {
 	Atoms []int
 }
 
+// Ring represents a simple molecular cycle.
+type Ring struct {
+	Atoms    []int
+	Aromatic bool
+}
+
 // SearchResult captures atom hits for a query.
 type SearchResult struct {
 	Query       string
@@ -65,6 +71,49 @@ func (m Molecule) Clone() Molecule {
 	}
 	copy(cloned.Bonds, m.Bonds)
 	return cloned
+}
+
+// WithoutHydrogens returns a copy of the molecule with explicit hydrogen atoms removed.
+// Implicit hydrogen counts are recomputed during normalization.
+func (m Molecule) WithoutHydrogens() Molecule {
+	if len(m.Atoms) == 0 {
+		return m.Clone()
+	}
+
+	indexMap := make(map[int]int, len(m.Atoms))
+	out := Molecule{
+		Name:   m.Name,
+		SMILES: m.SMILES,
+	}
+
+	for _, atom := range m.Atoms {
+		if atom.Symbol == "H" {
+			continue
+		}
+		cloned := atom
+		cloned.Neighbors = nil
+		cloned.Hydrogens = 0
+		cloned.Index = len(out.Atoms)
+		indexMap[atom.Index] = cloned.Index
+		out.Atoms = append(out.Atoms, cloned)
+	}
+
+	for _, bond := range m.Bonds {
+		from, okFrom := indexMap[bond.From]
+		to, okTo := indexMap[bond.To]
+		if !okFrom || !okTo {
+			continue
+		}
+		out.Bonds = append(out.Bonds, Bond{
+			From:     from,
+			To:       to,
+			Order:    bond.Order,
+			Aromatic: bond.Aromatic,
+		})
+	}
+
+	out.Normalize()
+	return out
 }
 
 // Normalize repairs indices, neighbors, and hydrogen estimates.
@@ -98,6 +147,22 @@ func (m *Molecule) Normalize() {
 	for i := range m.Atoms {
 		sort.Ints(m.Atoms[i].Neighbors)
 		m.Atoms[i].Hydrogens = maxInt(0, estimateHydrogens(m.Atoms[i], m.atomValence(i)))
+	}
+
+	rings := m.Rings()
+	for _, ring := range rings {
+		if !ring.Aromatic {
+			continue
+		}
+		for i, idx := range ring.Atoms {
+			m.Atoms[idx].Aromatic = true
+			next := ring.Atoms[(i+1)%len(ring.Atoms)]
+			for b := range m.Bonds {
+				if (m.Bonds[b].From == idx && m.Bonds[b].To == next) || (m.Bonds[b].From == next && m.Bonds[b].To == idx) {
+					m.Bonds[b].Aromatic = true
+				}
+			}
+		}
 	}
 
 	scaffold := m.ScaffoldAtoms()
@@ -181,6 +246,55 @@ func (m Molecule) BondBetween(a, b int) (Bond, bool) {
 		}
 	}
 	return Bond{}, false
+}
+
+// Rings returns simple cycles detected in the molecular graph.
+func (m Molecule) Rings() []Ring {
+	if len(m.Atoms) < 3 {
+		return nil
+	}
+
+	const maxRingSize = 8
+
+	seen := map[string]bool{}
+	var rings []Ring
+
+	var dfs func(start, current, parent int, path []int)
+	dfs = func(start, current, parent int, path []int) {
+		if len(path) > maxRingSize {
+			return
+		}
+		for _, neighbor := range m.Atoms[current].Neighbors {
+			if neighbor == parent {
+				continue
+			}
+			if neighbor == start && len(path) >= 3 {
+				cycle := append([]int(nil), path...)
+				key := canonicalCycle(cycle)
+				if !seen[key] {
+					seen[key] = true
+					rings = append(rings, Ring{Atoms: cycle, Aromatic: m.isAromaticRing(cycle)})
+				}
+				continue
+			}
+			if neighbor < start || containsInt(path, neighbor) {
+				continue
+			}
+			dfs(start, neighbor, current, append(path, neighbor))
+		}
+	}
+
+	for start := range m.Atoms {
+		dfs(start, start, -1, []int{start})
+	}
+
+	sort.Slice(rings, func(i, j int) bool {
+		if len(rings[i].Atoms) == len(rings[j].Atoms) {
+			return canonicalCycle(rings[i].Atoms) < canonicalCycle(rings[j].Atoms)
+		}
+		return len(rings[i].Atoms) < len(rings[j].Atoms)
+	})
+	return rings
 }
 
 // FunctionalGroups detects common medicinal-chemistry motifs.
@@ -316,7 +430,7 @@ func (m Molecule) Search(query string) SearchResult {
 	switch lower {
 	case "aromatic", "ring":
 		for _, atom := range m.Atoms {
-			if atom.Aromatic || m.atomIsScaffold(atom.Index) {
+			if atom.Aromatic {
 				matches[atom.Index] = true
 			}
 		}
@@ -762,6 +876,94 @@ func (m Molecule) firstNeighborWithSymbol(atomIdx int, symbol string, exclude in
 
 func (m Molecule) atomIsScaffold(idx int) bool {
 	return m.ScaffoldAtoms()[idx]
+}
+
+func (m Molecule) isAromaticRing(cycle []int) bool {
+	if len(cycle) < 5 || len(cycle) > 6 {
+		return false
+	}
+
+	piElectrons := 0
+	for i, idx := range cycle {
+		next := cycle[(i+1)%len(cycle)]
+		bond, ok := m.BondBetween(idx, next)
+		if !ok {
+			return false
+		}
+		if bond.Aromatic {
+			piElectrons += 1
+			continue
+		}
+		if bond.Order >= 2 {
+			piElectrons += 2
+		}
+	}
+
+	usable := true
+	for i, idx := range cycle {
+		next := cycle[(i+1)%len(cycle)]
+		prev := cycle[(i+len(cycle)-1)%len(cycle)]
+		bondNext, _ := m.BondBetween(idx, next)
+		bondPrev, _ := m.BondBetween(idx, prev)
+		if bondNext.Order >= 2 || bondPrev.Order >= 2 || bondNext.Aromatic || bondPrev.Aromatic {
+			continue
+		}
+		switch m.Atoms[idx].Symbol {
+		case "N", "O", "S", "P":
+			piElectrons += 2
+		default:
+			usable = false
+		}
+	}
+
+	if !usable || piElectrons < 6 {
+		return false
+	}
+	return (piElectrons-2)%4 == 0
+}
+
+func canonicalCycle(cycle []int) string {
+	if len(cycle) == 0 {
+		return ""
+	}
+	best := cycleKey(cycle)
+	reversed := reverseInts(cycle)
+	for i := 1; i < len(cycle); i++ {
+		rot := append(append([]int(nil), cycle[i:]...), cycle[:i]...)
+		if key := cycleKey(rot); key < best {
+			best = key
+		}
+		rotRev := append(append([]int(nil), reversed[i:]...), reversed[:i]...)
+		if key := cycleKey(rotRev); key < best {
+			best = key
+		}
+	}
+	return best
+}
+
+func cycleKey(cycle []int) string {
+	parts := make([]string, len(cycle))
+	for i, idx := range cycle {
+		parts[i] = strconv.Itoa(idx)
+	}
+	return strings.Join(parts, "-")
+}
+
+func reverseInts(values []int) []int {
+	out := append([]int(nil), values...)
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+func containsInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func maxInt(a, b int) int {

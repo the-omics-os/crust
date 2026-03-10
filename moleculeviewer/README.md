@@ -12,7 +12,10 @@ SmallMoleculeViewer is a focused overlay component for chemistry-heavy TUIs. It 
 
 - Parses practical small-molecule SMILES directly in pure Go.
 - Accepts V2000 MOL blocks and SDF payloads when 2D coordinates already exist.
+- Repairs missing MOL/SDF connectivity from source coordinates using a local gochem-style covalent-radius pass.
 - Generates deterministic 2D coordinates when connectivity is available but coordinates are not.
+- Reorients preserved coordinates onto the terminal grid by scoring candidate rotations instead of trusting the source frame.
+- Opens single-bond linkers between separate ring systems so multi-ring alkaloids remain legible on the terminal.
 - Renders a split view: structure on top, atom/bond inspector below.
 - Navigates by graph adjacency with directional arrow-key movement.
 - Cycles visualization planes for identity, heteroatoms, aromaticity, partial charge, and scaffold vs R-group.
@@ -69,7 +72,7 @@ The search prompt is intentionally lightweight and terminal-friendly. It support
 
 ## Rendering Strategy
 
-The structure pane uses Unicode line work for bonds and color-codes atoms according to the active plane. When the structure will not read cleanly in the available space, the component switches to an adjacency-list view rather than pretending the terminal depiction is still useful.
+The structure pane uses a deliberately small bond glyph alphabet (`─`, `│`, `╱`, `╲`) and lets color communicate bond order. Before rasterizing, the viewer scores multiple candidate rotations against terminal-grid artifacts so imported coordinates land in a more readable orientation. When the structure still will not read cleanly in the available space, the component switches to an adjacency-list view rather than pretending the terminal depiction is still useful.
 
 `[GIF PLACEHOLDER: graceful fallback from diagram view to adjacency view on a narrow terminal]`
 
@@ -79,6 +82,9 @@ The structure pane uses Unicode line work for bonds and color-codes atoms accord
 - Typed `Molecule`, `Atom`, and `Bond` models for host-side integration.
 - Functional-group detection and scaffold approximation are built into the domain layer so search and rendering share the same chemistry metadata.
 - Existing coordinates from MOL/SDF input are preserved and normalized rather than discarded.
+- Missing bond tables in coordinate-bearing MOL/SDF records are supplemented rather than left disconnected.
+- Terminal projection is aspect-aware and rotation-aware rather than a fixed-scale dump of the 2D coordinates.
+- Ring-to-ring single-bond linkers are stretched when needed so adjacent ring systems do not collapse into one unreadable cluster.
 
 ## Files
 

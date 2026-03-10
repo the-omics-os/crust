@@ -223,6 +223,7 @@ func ParseMolBlock(molBlock string) (Molecule, error) {
 		})
 	}
 
+	mol.RepairConnectivityFromCoords()
 	mol.Normalize()
 	return mol, nil
 }

@@ -3,7 +3,6 @@ package moleculeviewer
 import (
 	"fmt"
 	"image/color"
-	"math"
 	"sort"
 	"strings"
 
@@ -109,19 +108,9 @@ func (m Model) renderDiagram(width, height int) ([]string, bool) {
 		return m.renderAdjacency(width, height), true
 	}
 
-	type pt struct{ x, y int }
-	positions := m.projectAtoms(width, height)
-	collisions := map[pt]int{}
-	for _, pos := range positions {
-		collisions[pt{x: pos[0], y: pos[1]}]++
-	}
-	count := 0
-	for _, c := range collisions {
-		if c > 1 {
-			count += c - 1
-		}
-	}
-	if count > maxInt(2, len(m.molecule.Atoms)/5) {
+	projection := m.projectAtoms(width, height)
+	positions := projection.positions
+	if projection.collisions > maxInt(2, len(m.molecule.Atoms)/5) {
 		return m.renderAdjacency(width, height), true
 	}
 
@@ -136,18 +125,36 @@ func (m Model) renderDiagram(width, height int) ([]string, bool) {
 	for _, bond := range m.molecule.Bonds {
 		a := positions[bond.From]
 		b := positions[bond.To]
-		glyph := bondGlyph(b[0]-a[0], b[1]-a[1], bond)
 		style := lipgloss.NewStyle().Foreground(m.bondColor(bond))
-		for _, p := range rasterLine(a[0], a[1], b[0], b[1]) {
-			if (p[0] == a[0] && p[1] == a[1]) || (p[0] == b[0] && p[1] == b[1]) {
+		startHidden := m.diagramLabel(bond.From) == ""
+		endHidden := m.diagramLabel(bond.To) == ""
+		points := rasterLine(a[0], a[1], b[0], b[1])
+		for idx, p := range points {
+			if idx == 0 && !startHidden {
 				continue
 			}
+			if idx == len(points)-1 && !endHidden {
+				continue
+			}
+			// Per-step glyph: use the local step direction, not the overall bond direction
+			var sdx, sdy int
+			if idx < len(points)-1 {
+				sdx = points[idx+1][0] - p[0]
+				sdy = points[idx+1][1] - p[1]
+			} else if idx > 0 {
+				sdx = p[0] - points[idx-1][0]
+				sdy = p[1] - points[idx-1][1]
+			}
+			glyph := m.bondGlyph(sdx, sdy, bond)
 			drawCanvas(canvas, p[0], p[1], style.Render(glyph), 1)
 		}
 	}
 
-	for idx, atom := range m.molecule.Atoms {
-		label := atom.Symbol
+	for idx := range m.molecule.Atoms {
+		label := m.diagramLabel(idx)
+		if label == "" {
+			continue
+		}
 		style := m.atomStyle(idx)
 		startX := positions[idx][0] - (len([]rune(label))-1)/2
 		for off, r := range []rune(label) {
@@ -284,39 +291,6 @@ func (m Model) renderInspector(fallback bool) []string {
 	return []string{line1, line2, line3, searchLine, line5}
 }
 
-func (m Model) projectAtoms(width, height int) [][2]int {
-	scaleX := 4.0
-	scaleY := 2.0
-	refX := 0.0
-	refY := 0.0
-
-	minX, maxX := m.molecule.Atoms[0].Coords[0], m.molecule.Atoms[0].Coords[0]
-	minY, maxY := m.molecule.Atoms[0].Coords[1], m.molecule.Atoms[0].Coords[1]
-	for _, atom := range m.molecule.Atoms[1:] {
-		minX = math.Min(minX, atom.Coords[0])
-		maxX = math.Max(maxX, atom.Coords[0])
-		minY = math.Min(minY, atom.Coords[1])
-		maxY = math.Max(maxY, atom.Coords[1])
-	}
-
-	if (maxX-minX)*scaleX < float64(width-6) && (maxY-minY)*scaleY < float64(height-4) {
-		refX = (minX + maxX) / 2
-		refY = (minY + maxY) / 2
-	} else if m.selectedAtom >= 0 && m.selectedAtom < len(m.molecule.Atoms) {
-		refX = m.molecule.Atoms[m.selectedAtom].Coords[0]
-		refY = m.molecule.Atoms[m.selectedAtom].Coords[1]
-	}
-
-	centerX := width / 2
-	centerY := height / 2
-	out := make([][2]int, len(m.molecule.Atoms))
-	for i, atom := range m.molecule.Atoms {
-		out[i][0] = int(math.Round((atom.Coords[0]-refX)*scaleX)) + centerX
-		out[i][1] = centerY - int(math.Round((atom.Coords[1]-refY)*scaleY))
-	}
-	return out
-}
-
 func (m Model) atomStyle(index int) lipgloss.Style {
 	atom := m.molecule.Atoms[index]
 	style := lipgloss.NewStyle().Bold(true).Foreground(m.atomColor(atom))
@@ -327,6 +301,28 @@ func (m Model) atomStyle(index int) lipgloss.Style {
 		style = style.Background(m.theme.Selected).Foreground(lipgloss.Color("0")).Underline(false)
 	}
 	return style
+}
+
+func (m Model) diagramLabel(index int) string {
+	if index < 0 || index >= len(m.molecule.Atoms) {
+		return ""
+	}
+	atom := m.molecule.Atoms[index]
+	selected := index == m.selectedAtom
+	matched := m.searchMatches[index]
+
+	if atom.Symbol == "H" && atom.Charge == 0 && !selected && !matched {
+		return ""
+	}
+
+	if atom.Symbol == "C" && atom.Charge == 0 {
+		if selected || matched {
+			return "C"
+		}
+		return "C"
+	}
+
+	return atom.Symbol
 }
 
 func (m Model) atomColor(atom Atom) color.Color {
@@ -361,11 +357,13 @@ func (m Model) atomColor(atom Atom) color.Color {
 }
 
 func (m Model) bondColor(bond Bond) color.Color {
-	color := m.theme.Bond
+	color := m.bondOrderColor(bond)
 	switch m.mode {
 	case ViewModeAromaticity:
 		if bond.Aromatic {
 			color = m.theme.AromaticBond
+		} else {
+			color = m.theme.TextMuted
 		}
 	case ViewModePartialCharge:
 		left := m.molecule.Atoms[bond.From].PartialCharge
@@ -381,10 +379,6 @@ func (m Model) bondColor(bond Bond) color.Color {
 		} else {
 			color = m.theme.RGroup
 		}
-	default:
-		if bond.Aromatic {
-			color = m.theme.AromaticBond
-		}
 	}
 
 	if m.searchMatches[bond.From] && m.searchMatches[bond.To] {
@@ -394,6 +388,20 @@ func (m Model) bondColor(bond Bond) color.Color {
 		color = m.theme.Help
 	}
 	return color
+}
+
+func (m Model) bondOrderColor(bond Bond) color.Color {
+	if bond.Aromatic {
+		return m.theme.AromaticBond
+	}
+	switch bond.Order {
+	case 3:
+		return m.theme.TripleBond
+	case 2:
+		return m.theme.DoubleBond
+	default:
+		return m.theme.Bond
+	}
 }
 
 func elementColor(symbol string, theme Theme) color.Color {
@@ -419,45 +427,16 @@ func elementColor(symbol string, theme Theme) color.Color {
 	}
 }
 
-func bondGlyph(dx, dy int, bond Bond) string {
+func (m Model) bondGlyph(dx, dy int, bond Bond) string {
 	horizontal := absInt(dx) >= absInt(dy)*2
 	vertical := absInt(dy) >= absInt(dx)*2
 
-	if bond.Aromatic {
-		if horizontal {
-			return "┄"
-		}
-		if vertical {
-			return "┆"
-		}
-		if dx*dy >= 0 {
-			return "╲"
-		}
-		return "╱"
+	_ = bond
+	if horizontal {
+		return "─"
 	}
-
-	switch bond.Order {
-	case 3:
-		if horizontal {
-			return "≡"
-		}
-		if vertical {
-			return "║"
-		}
-	case 2:
-		if horizontal {
-			return "═"
-		}
-		if vertical {
-			return "║"
-		}
-	default:
-		if horizontal {
-			return "─"
-		}
-		if vertical {
-			return "│"
-		}
+	if vertical {
+		return "│"
 	}
 	if dx*dy >= 0 {
 		return "╲"

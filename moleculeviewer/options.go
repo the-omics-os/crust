@@ -17,6 +17,8 @@ type Theme struct {
 	Metal        color.Color
 	Hydrogen     color.Color
 	Bond         color.Color
+	DoubleBond   color.Color
+	TripleBond   color.Color
 	AromaticBond color.Color
 	Positive     color.Color
 	Negative     color.Color
@@ -42,6 +44,8 @@ func DefaultTheme() Theme {
 		Metal:        lipgloss.Color("45"),
 		Hydrogen:     lipgloss.Color("255"),
 		Bond:         lipgloss.Color("244"),
+		DoubleBond:   lipgloss.Color("252"),
+		TripleBond:   lipgloss.Color("111"),
 		AromaticBond: lipgloss.Color("179"),
 		Positive:     lipgloss.Color("201"),
 		Negative:     lipgloss.Color("81"),

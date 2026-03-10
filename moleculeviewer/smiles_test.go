@@ -72,6 +72,35 @@ func TestParseMOL(t *testing.T) {
 	}
 }
 
+func TestParseMOL_RepairsMissingConnectivityFromCoords(t *testing.T) {
+	mol, err := ParseMOL(incompleteEthanolMolBlock())
+	if err != nil {
+		t.Fatalf("ParseMOL returned error: %v", err)
+	}
+	if len(mol.Bonds) != 2 {
+		t.Fatalf("expected repaired ethanol to have 2 bonds, got %d", len(mol.Bonds))
+	}
+	if _, ok := mol.BondBetween(1, 2); !ok {
+		t.Fatal("expected missing C-O bond to be repaired from coordinates")
+	}
+}
+
+func TestRepairConnectivityFromCoords_PerceivesBondlessMol(t *testing.T) {
+	mol, err := ParseMOL(bondlessWaterMolBlock())
+	if err != nil {
+		t.Fatalf("ParseMOL returned error: %v", err)
+	}
+	if len(mol.Bonds) != 2 {
+		t.Fatalf("expected water to gain 2 bonds, got %d", len(mol.Bonds))
+	}
+	if _, ok := mol.BondBetween(0, 1); !ok {
+		t.Fatal("expected O-H bond to be perceived")
+	}
+	if _, ok := mol.BondBetween(0, 2); !ok {
+		t.Fatal("expected second O-H bond to be perceived")
+	}
+}
+
 func TestMoleculeSearch(t *testing.T) {
 	mol, err := ParseSMILES("CCO")
 	if err != nil {
@@ -111,6 +140,31 @@ func sampleMolBlock() string {
     2.4188    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
   1  2  1  0  0  0  0
   2  3  1  0  0  0  0
+M  END
+`
+}
+
+func incompleteEthanolMolBlock() string {
+	return `Ethanol
+  Codex
+
+  3  1  0  0  0  0            999 V2000
+    0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
+    1.2094    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
+    2.4188    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
+  1  2  1  0  0  0  0
+M  END
+`
+}
+
+func bondlessWaterMolBlock() string {
+	return `Water
+  Codex
+
+  3  0  0  0  0  0            999 V2000
+    0.0000    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
+    0.9584    0.0000    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0
+   -0.2390    0.9270    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0
 M  END
 `
 }
