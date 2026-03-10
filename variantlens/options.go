@@ -10,10 +10,11 @@ import (
 type ViewMode string
 
 const (
-	ViewSummary  ViewMode = "summary"
-	ViewDetail   ViewMode = "detail"
-	ViewHGVS     ViewMode = "hgvs"
-	ViewEvidence ViewMode = "evidence"
+	ViewSummary    ViewMode = "summary"
+	ViewAnnotation ViewMode = "annotation"
+	ViewDetail     ViewMode = ViewAnnotation
+	ViewHGVS       ViewMode = "hgvs"
+	ViewEvidence   ViewMode = "evidence"
 )
 
 func (v ViewMode) String() string {
@@ -25,14 +26,27 @@ func (v ViewMode) String() string {
 
 func (v ViewMode) next() ViewMode {
 	switch v {
-	case ViewDetail:
+	case ViewAnnotation:
 		return ViewHGVS
 	case ViewHGVS:
 		return ViewEvidence
 	case ViewEvidence:
 		return ViewSummary
 	default:
-		return ViewDetail
+		return ViewAnnotation
+	}
+}
+
+func (v ViewMode) prev() ViewMode {
+	switch v {
+	case ViewSummary:
+		return ViewEvidence
+	case ViewAnnotation:
+		return ViewSummary
+	case ViewHGVS:
+		return ViewAnnotation
+	default:
+		return ViewHGVS
 	}
 }
 

@@ -119,10 +119,10 @@ func TestSetContextMakesDefensiveCopy(t *testing.T) {
 	}
 }
 
-func TestVariantNavigationEmitsVariantChangedMsg(t *testing.T) {
+func TestArrowNavigationEmitsVariantChangedMsg(t *testing.T) {
 	m := New(WithContext(sampleContext()))
 
-	updated, cmd := m.Update(keyText("j"))
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if cmd == nil {
 		t.Fatal("expected variant changed cmd")
 	}
@@ -141,7 +141,7 @@ func TestVariantNavigationEmitsVariantChangedMsg(t *testing.T) {
 		t.Fatalf("expected selected index 1, got %d", got.SelectedIndex())
 	}
 
-	updated, _ = got.Update(keyText("k"))
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if updated.(Model).SelectedIndex() != 0 {
 		t.Fatalf("expected to navigate back to index 0, got %d", updated.(Model).SelectedIndex())
 	}
@@ -150,7 +150,7 @@ func TestVariantNavigationEmitsVariantChangedMsg(t *testing.T) {
 func TestContextResizeAndClamp(t *testing.T) {
 	m := New(WithContext(sampleContext()))
 
-	updated, cmd := m.Update(keyText("l"))
+	updated, cmd := m.Update(keyText("="))
 	if cmd == nil {
 		t.Fatal("expected context size changed cmd")
 	}
@@ -169,8 +169,14 @@ func TestContextResizeAndClamp(t *testing.T) {
 		t.Fatalf("expected stored context size 7, got %d", got.ContextSize())
 	}
 
+	updated, _ = got.Update(keyText("l"))
+	got = updated.(Model)
+	if got.ContextSize() != 10 {
+		t.Fatalf("expected compatibility alias l to widen context to 10, got %d", got.ContextSize())
+	}
+
 	for i := 0; i < 8; i++ {
-		updated, _ = got.Update(keyText("h"))
+		updated, _ = got.Update(keyText("-"))
 		got = updated.(Model)
 	}
 	if got.ContextSize() != minContextSize {
@@ -178,58 +184,34 @@ func TestContextResizeAndClamp(t *testing.T) {
 	}
 }
 
-func TestTabCyclesViewModes(t *testing.T) {
+func TestTabAndNumericShortcutsChangeView(t *testing.T) {
 	m := New(WithContext(sampleContext()))
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if cmd == nil {
 		t.Fatal("expected view mode change cmd")
 	}
-	if updated.(Model).ViewMode() != ViewDetail {
-		t.Fatalf("expected detail view, got %v", updated.(Model).ViewMode())
+	if updated.(Model).ViewMode() != ViewAnnotation {
+		t.Fatalf("expected annotation view, got %v", updated.(Model).ViewMode())
 	}
 
-	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if updated.(Model).ViewMode() != ViewHGVS {
-		t.Fatalf("expected HGVS view, got %v", updated.(Model).ViewMode())
-	}
-
-	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if updated.(Model).ViewMode() != ViewEvidence {
-		t.Fatalf("expected evidence view, got %v", updated.(Model).ViewMode())
-	}
-
-	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if updated.(Model).ViewMode() != ViewSummary {
-		t.Fatalf("expected summary view, got %v", updated.(Model).ViewMode())
+		t.Fatalf("expected summary view after shift+tab, got %v", updated.(Model).ViewMode())
+	}
+
+	updated, _ = updated.(Model).Update(keyText("4"))
+	if updated.(Model).ViewMode() != ViewEvidence {
+		t.Fatalf("expected evidence view from numeric shortcut, got %v", updated.(Model).ViewMode())
 	}
 }
 
-func TestEnterOpensDetailThenSubmits(t *testing.T) {
+func TestEnterSubmitsFocusedVariant(t *testing.T) {
 	m := New(WithContext(sampleContext()))
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("expected detail toggle cmd on first enter")
-	}
-
-	msg := cmd()
-	detailMsg, ok := msg.(DetailToggledMsg)
-	if !ok {
-		t.Fatalf("expected DetailToggledMsg, got %T", msg)
-	}
-	if !detailMsg.Expanded {
-		t.Fatal("expected detail mode to open")
-	}
-
-	got := updated.(Model)
-	if !got.DetailMode() {
-		t.Fatal("expected detail mode to be active")
-	}
-
-	_, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected submit cmd on second enter")
+		t.Fatal("expected submit cmd on enter")
 	}
 
 	submit, ok := cmd().(crust.SubmitMsg)
@@ -247,7 +229,7 @@ func TestEnterOpensDetailThenSubmits(t *testing.T) {
 	}
 }
 
-func TestEscClosesHelpThenDetailThenCancels(t *testing.T) {
+func TestEscClosesHelpThenCancels(t *testing.T) {
 	m := New(WithContext(sampleContext()))
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
@@ -265,44 +247,69 @@ func TestEscClosesHelpThenDetailThenCancels(t *testing.T) {
 		t.Fatal("expected help to close")
 	}
 
-	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	got = updated.(Model)
-	if !got.DetailMode() {
-		t.Fatal("expected detail mode to open")
-	}
-
-	updated, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	got = updated.(Model)
-	if cmd != nil {
-		t.Fatal("expected esc to close detail without cancel")
-	}
-	if got.DetailMode() {
-		t.Fatal("expected detail mode to close")
-	}
-
 	_, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
-		t.Fatal("expected cancel cmd after active layers are closed")
+		t.Fatal("expected cancel cmd after help is closed")
 	}
 	if _, ok := cmd().(crust.CancelMsg); !ok {
 		t.Fatalf("expected crust.CancelMsg, got %T", cmd())
 	}
 }
 
-func TestRenderContainsVariantContext(t *testing.T) {
+func TestWindowSizeMsgSetsWidth(t *testing.T) {
+	m := New(WithContext(sampleContext()))
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		t.Fatal("expected nil cmd for window size message")
+	}
+	if updated.(Model).Width() != 120 {
+		t.Fatalf("expected width 120, got %d", updated.(Model).Width())
+	}
+}
+
+func TestRenderContainsNavigatorTabsAndActionBar(t *testing.T) {
 	m := New(WithContext(sampleContext()), WithWidth(88))
 
 	view := m.Render()
 	for _, want := range []string{
-		"Variant 1/2",
-		"BRCA1",
+		"Variants",
+		"Lenses",
+		"Annotation",
+		"Legend",
 		"Cys -> Gly",
 		"ClinVar: Pathogenic",
-		"Features",
+		"[#]",
 		"Exon 5",
+		"Arrows",
+		"Enter",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected render to contain %q", want)
+		}
+	}
+}
+
+func TestCompactLensStripStillShowsAllModes(t *testing.T) {
+	m := New(WithContext(sampleContext()), WithWidth(40))
+	view := m.Render()
+
+	for _, want := range []string{"1:S", "2:A", "3:H", "4:E"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected compact lens strip to contain %q", want)
+		}
+	}
+}
+
+func TestRenderLinesStayWithinConfiguredWidth(t *testing.T) {
+	for _, width := range []int{40, 44, 56, 60, 68, 88} {
+		m := New(WithContext(sampleContext()), WithWidth(width))
+		view := m.Render()
+
+		for _, line := range strings.Split(view, "\n") {
+			if lipgloss.Width(line) > width {
+				t.Fatalf("rendered line exceeds width %d: got %d in %q", width, lipgloss.Width(line), line)
+			}
 		}
 	}
 }
@@ -319,8 +326,11 @@ func TestRenderHelpAndEmptyState(t *testing.T) {
 	if !strings.Contains(view, "VariantLens Help") {
 		t.Fatal("expected help box title in render output")
 	}
-	if !strings.Contains(view, "step between variants") {
-		t.Fatal("expected help instructions in render output")
+	if !strings.Contains(view, "move to the previous or next variant") {
+		t.Fatal("expected updated help instructions in render output")
+	}
+	if !strings.Contains(view, "Feature glyphs: = exon, # CDS, ~ domain, : motif, + primer.") {
+		t.Fatal("expected legend explanation in help output")
 	}
 }
 
@@ -348,17 +358,9 @@ func TestSettersUpdateState(t *testing.T) {
 	}
 }
 
-func TestInitAndNonKeyMessages(t *testing.T) {
+func TestInitReturnsNilCmd(t *testing.T) {
 	m := New(WithContext(sampleContext()))
 	if cmd := m.Init(); cmd != nil {
 		t.Fatal("expected nil init cmd")
-	}
-
-	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	if cmd != nil {
-		t.Fatal("expected nil cmd for non-key messages")
-	}
-	if updated.(Model).Width() != m.Width() {
-		t.Fatal("expected non-key message to leave model unchanged")
 	}
 }

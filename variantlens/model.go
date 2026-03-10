@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultWidth       = 96
-	minWidth           = 56
+	minWidth           = 40
 	defaultContextSize = 12
 	minContextSize     = 3
 	contextStep        = 3
@@ -38,12 +38,6 @@ type ViewModeChangedMsg struct {
 	Mode ViewMode
 }
 
-// DetailToggledMsg is emitted when expanded detail mode opens or closes.
-type DetailToggledMsg struct {
-	Expanded bool
-	Variant  Variant
-}
-
 // Model is the Bubble Tea model for VariantLens.
 type Model struct {
 	context  VariantContext
@@ -51,7 +45,6 @@ type Model struct {
 	theme    Theme
 	selected int
 	viewMode ViewMode
-	detail   bool
 	showHelp bool
 }
 
@@ -77,11 +70,18 @@ func (m Model) Init() tea.Cmd { return nil }
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	km, ok := msg.(tea.KeyPressMsg)
-	if !ok {
+	switch typed := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = clampMin(typed.Width, minWidth)
+		return m, nil
+	case tea.KeyPressMsg:
+		return m.updateKey(typed)
+	default:
 		return m, nil
 	}
+}
 
+func (m Model) updateKey(km tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := km.String()
 	if m.showHelp {
 		switch key {
@@ -92,26 +92,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "j", "down":
+	case "right", "down", "j":
 		if len(m.context.Variants) == 0 || m.selected >= len(m.context.Variants)-1 {
 			return m, nil
 		}
 		m.selected++
 		return m, variantChangedCmd(m.selected, m.context.Variants[m.selected])
-	case "k", "up":
+	case "left", "up", "k":
 		if len(m.context.Variants) == 0 || m.selected <= 0 {
 			return m, nil
 		}
 		m.selected--
 		return m, variantChangedCmd(m.selected, m.context.Variants[m.selected])
-	case "l", "right":
+	case "]", "=", "+", "shift+right", "l":
 		old := m.context.ContextSize
 		m.context.ContextSize = clampContextSize(m.context.ContextSize+contextStep, len(m.context.RefSequence))
 		if m.context.ContextSize == old {
 			return m, nil
 		}
 		return m, contextSizeChangedCmd(m.context.ContextSize)
-	case "h", "left":
+	case "[", "-", "shift+left", "h":
 		old := m.context.ContextSize
 		m.context.ContextSize = clampContextSize(m.context.ContextSize-contextStep, len(m.context.RefSequence))
 		if m.context.ContextSize == old {
@@ -121,16 +121,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.viewMode = m.viewMode.next()
 		return m, viewModeChangedCmd(m.viewMode)
+	case "shift+tab":
+		m.viewMode = m.viewMode.prev()
+		return m, viewModeChangedCmd(m.viewMode)
+	case "1":
+		return m.setViewMode(ViewSummary)
+	case "2":
+		return m.setViewMode(ViewAnnotation)
+	case "3":
+		return m.setViewMode(ViewHGVS)
+	case "4":
+		return m.setViewMode(ViewEvidence)
 	case "?":
 		m.showHelp = !m.showHelp
 		return m, nil
 	case "enter":
 		if len(m.context.Variants) == 0 {
 			return m, nil
-		}
-		if !m.detail {
-			m.detail = true
-			return m, detailToggledCmd(true, m.context.Variants[m.selected])
 		}
 		return m, func() tea.Msg {
 			return crust.SubmitMsg{
@@ -144,10 +151,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "esc":
-		if m.detail {
-			m.detail = false
-			return m, nil
-		}
 		return m, func() tea.Msg {
 			return crust.CancelMsg{
 				Component: "variant_lens",
@@ -157,6 +160,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) setViewMode(mode ViewMode) (tea.Model, tea.Cmd) {
+	if m.viewMode == mode {
+		return m, nil
+	}
+	m.viewMode = mode
+	return m, viewModeChangedCmd(m.viewMode)
 }
 
 // View implements tea.Model.
@@ -190,11 +201,6 @@ func (m Model) SelectedVariant() (Variant, bool) {
 // ViewMode returns the active view mode.
 func (m Model) ViewMode() ViewMode {
 	return m.viewMode
-}
-
-// DetailMode reports whether expanded detail is visible.
-func (m Model) DetailMode() bool {
-	return m.detail
 }
 
 // HelpVisible reports whether help is visible.
@@ -299,12 +305,6 @@ func contextSizeChangedCmd(size int) tea.Cmd {
 func viewModeChangedCmd(mode ViewMode) tea.Cmd {
 	return func() tea.Msg {
 		return ViewModeChangedMsg{Mode: mode}
-	}
-}
-
-func detailToggledCmd(expanded bool, variant Variant) tea.Cmd {
-	return func() tea.Msg {
-		return DetailToggledMsg{Expanded: expanded, Variant: variant}
 	}
 }
 

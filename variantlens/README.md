@@ -7,7 +7,7 @@ It keeps four layers aligned in one terminal-native view:
 - reference and alternate sequence
 - codon and amino-acid consequence
 - nearby annotated features
-- interpretation lenses for summary, detail, HGVS, and evidence
+- interpretation lenses for summary, annotation, HGVS, and evidence
 
 This package is built for review workflows where the important work is comparison, not navigation chrome. You step between variants, widen or narrow context, and keep consequence, notation, and feature structure in the same visual frame.
 
@@ -16,23 +16,26 @@ This package is built for review workflows where the important work is compariso
 ## What is implemented
 
 - A standalone `tea.Model` with typed constructors and functional options
-- Interactive navigation with `j/k`, arrows, `Tab`, `Enter`, `Esc`, and `?`
+- Interactive navigation with arrows, `Tab`, `1-4`, `Enter`, `Esc`, and `?`
 - Streaming-friendly setters for replacing context, variants, features, and sequence data
 - Aligned reference/alternate rendering with feature tracks
 - CDS-aware codon and amino-acid summaries when coding context is present
-- Overlay interaction semantics that unwind help and focused detail before canceling
+- A visible navigator rail, tab strip, legend, and footer action bar so the control model is on-screen
 - Tests covering navigation, defensive copying, submit/cancel behavior, and rendering invariants
 
 ## Interaction model
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` or `down` / `up` | Step between variants |
-| `h` / `l` or `left` / `right` | Narrow or widen the visible sequence window |
-| `Tab` | Cycle `summary -> detail -> hgvs -> evidence` |
-| `Enter` | Open focused detail, then confirm the current variant |
-| `Esc` | Close help, leave focused detail, then cancel the overlay |
+| `left` / `right` or `up` / `down` | Move to the previous or next variant |
+| `[` / `]` or `-` / `+` | Narrow or widen the visible sequence window |
+| `Tab` / `shift+Tab` | Move forward or backward through the lenses |
+| `1` / `2` / `3` / `4` | Jump directly to Summary, Annotation, HGVS, or Evidence |
+| `Enter` | Submit the focused variant |
+| `Esc` | Close help, then cancel the overlay |
 | `?` | Toggle help |
+
+`j/k/h/l` are still supported as compatibility aliases, but the advertised controls are the ones shown on-screen.
 
 > GIF placeholder: switching between summary, HGVS, and evidence lenses
 
@@ -40,13 +43,16 @@ This package is built for review workflows where the important work is compariso
 
 Each focused variant render is organized as:
 
-1. Header with variant identity, gene, consequence, current lens, and impact level
-2. Sequence panel with aligned `ref`, `alt`, caret marker, and codon/amino-acid summary
-3. Feature panel clipped to the visible coordinate window
-4. Lens-specific body content for summary, detail, HGVS, or evidence
-5. Optional focused-detail box used as the confirmation step before `SubmitMsg`
+1. Navigator rail showing the current variant and nearby neighbors
+2. Focus header with gene, HGVS, consequence, and current impact
+3. Visible lens tabs plus current context-width badge
+4. Sequence panel with aligned `ref`, `alt`, caret marker, and codon/amino-acid summary
+5. Feature panel clipped to the visible coordinate window
+6. Lens-specific body content for summary, annotation, HGVS, or evidence
+7. Persistent legend for sequence colors and feature glyphs
+8. Persistent footer action bar listing the available controls
 
-That structure is intentional: identity first, local molecular consequence second, annotation context third, and supporting interpretation last.
+That structure is intentional: orient first, inspect second, interpret third, and select only when ready.
 
 > GIF placeholder: reading the aligned sequence, codon, and feature tracks together
 
@@ -96,13 +102,11 @@ Useful setters:
 
 ## Submit and cancel semantics
 
-VariantLens is an overlay inspector, so confirmation is explicit:
+VariantLens now treats browsing and selection as separate but non-modal concerns:
 
-- The first `Enter` opens focused detail for the selected variant
-- The second `Enter` emits `crust.SubmitMsg` with the focused variant, index, view mode, and context size
-- `Esc` closes active UI layers before emitting `crust.CancelMsg`
-
-This lets a host application treat browsing and confirmation as separate steps while keeping the terminal interaction compact.
+- `Enter` emits `crust.SubmitMsg` for the focused variant immediately
+- `Esc` closes help if it is open, otherwise emits `crust.CancelMsg`
+- The current lens and local context stay visible while browsing, so selection no longer depends on a hidden confirmation state
 
 ## Notes on coordinates and translation
 

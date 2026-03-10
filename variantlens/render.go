@@ -38,19 +38,20 @@ func (m Model) render() string {
 	if m.showHelp {
 		lines = append(lines, m.renderHelpBox(width))
 	}
+	lines = append(lines, m.renderVariantRail(width))
 	lines = append(lines, m.renderHeader(current, width))
+	lines = append(lines, m.renderTabs(width))
 	lines = append(lines, m.renderSeparator(width))
 	lines = append(lines, m.renderSequenceSection(window)...)
 	lines = append(lines, m.renderSeparator(width))
 	lines = append(lines, m.renderFeatureSection(window, current.Position, width)...)
+	lines = append(lines, m.renderLegend(width)...)
 	lines = append(lines, m.renderSeparator(width))
 	lines = append(lines, m.renderBody(current, window, width)...)
-	if m.detail {
-		lines = append(lines, m.renderSeparator(width))
-		lines = append(lines, m.renderExpandedDetail(current, width))
-	}
+	lines = append(lines, m.renderSeparator(width))
+	lines = append(lines, m.renderFooter(width))
 
-	return lipgloss.JoinVertical(lipgloss.Left, compactStrings(lines)...)
+	return strings.Join(compactStrings(lines), "\n")
 }
 
 func (m Model) renderEmpty(width int) string {
@@ -63,14 +64,10 @@ func (m Model) renderEmpty(width int) string {
 
 func (m Model) renderHeader(current Variant, width int) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Header)
-	textStyle := lipgloss.NewStyle().Foreground(m.theme.Text)
 	mutedStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
 	impactStyle := lipgloss.NewStyle().Bold(true).Foreground(m.impactColor(current.Impact))
 
-	headerParts := []string{
-		fmt.Sprintf("Variant %d/%d", m.selected+1, len(m.context.Variants)),
-		coalesce(current.Gene, "Unassigned gene"),
-	}
+	headerParts := []string{coalesce(current.Gene, "Unassigned gene")}
 	if hgvs := primaryHGVS(current.HGVS); hgvs != "" {
 		headerParts = append(headerParts, hgvs)
 	}
@@ -82,11 +79,9 @@ func (m Model) renderHeader(current Variant, width int) string {
 	}
 
 	status := []string{
-		fmt.Sprintf("view %s", m.viewMode.String()),
-		fmt.Sprintf("+/-%dbp", m.context.ContextSize),
-	}
-	if m.detail {
-		status = append(status, "detail armed")
+		fmt.Sprintf("variant %d/%d", m.selected+1, len(m.context.Variants)),
+		fmt.Sprintf("focus %s", formatPosition(current.Position)),
+		fmt.Sprintf("window +/-%dbp", m.context.ContextSize),
 	}
 
 	line1Plain := strings.Join(headerParts, " | ")
@@ -94,13 +89,19 @@ func (m Model) renderHeader(current Variant, width int) string {
 	if len(line1Plain) > width {
 		line1Plain = truncatePlain(line1Plain, width)
 	}
-	if len(line2Plain) > width {
-		line2Plain = truncatePlain(line2Plain, width)
+	impactLabel := coalesce(current.Impact, "UNSPECIFIED")
+	separator := " | "
+	available := width - len(separator) - len(impactLabel)
+	if available < 0 {
+		available = 0
+	}
+	if len(line2Plain) > available {
+		line2Plain = truncatePlain(line2Plain, available)
 	}
 	line1 := titleStyle.Render(line1Plain)
-	line2 := textStyle.Render(line2Plain) + " | " + impactStyle.Render(coalesce(current.Impact, "UNSPECIFIED"))
+	line2 := mutedStyle.Render(line2Plain) + separator + impactStyle.Render(impactLabel)
 
-	return lipgloss.JoinVertical(lipgloss.Left, line1, mutedStyle.Render(line2))
+	return lipgloss.JoinVertical(lipgloss.Left, line1, line2)
 }
 
 func (m Model) renderSeparator(width int) string {
@@ -161,8 +162,9 @@ func (m Model) renderFeatureSection(window renderWindow, position, width int) []
 	for _, feature := range features {
 		bar := m.featureBar(feature, window.visibleStart, window.visibleEnd, position, trackWidth)
 		color := m.featureColor(feature.Type)
-		label := clipAndPad(coalesce(feature.Name, feature.Type), 16)
 		rangeText := fmt.Sprintf("%d-%d", feature.Start, feature.End)
+		labelWidth := clampInt(width-(trackWidth+2)-len(rangeText)-6, 8, 16)
+		label := clipAndPad(coalesce(feature.Name, feature.Type), labelWidth)
 		featureStyle := lipgloss.NewStyle().Foreground(color).Bold(true)
 		rangeStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
 
@@ -173,8 +175,8 @@ func (m Model) renderFeatureSection(window renderWindow, position, width int) []
 
 func (m Model) renderBody(current Variant, window renderWindow, width int) []string {
 	switch m.viewMode {
-	case ViewDetail:
-		return m.renderDetailBody(current, window, width)
+	case ViewAnnotation:
+		return m.renderAnnotationBody(current, window, width)
 	case ViewHGVS:
 		return m.renderHGVSBody(current, width)
 	case ViewEvidence:
@@ -186,6 +188,7 @@ func (m Model) renderBody(current Variant, window renderWindow, width int) []str
 
 func (m Model) renderSummaryBody(current Variant, width int) []string {
 	lines := []string{
+		lipgloss.NewStyle().Bold(true).Foreground(m.theme.Text).Render("Summary"),
 		labeledText("type", current.Type, width, m.theme),
 		labeledText("consequence", current.Consequence, width, m.theme),
 		labeledText("impact", current.Impact, width, m.theme),
@@ -197,11 +200,11 @@ func (m Model) renderSummaryBody(current Variant, width int) []string {
 		evidence = "No supporting evidence provided."
 	}
 	lines = append(lines, labeledText("evidence", evidence, width, m.theme))
-	lines = append(lines, lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("Enter opens focused detail. Enter again confirms the current variant."))
+	lines = append(lines, wrappedMutedText("Enter selects this variant. Use Tab or 1-4 to switch interpretation lenses.", width, m.theme))
 	return lines
 }
 
-func (m Model) renderDetailBody(current Variant, window renderWindow, width int) []string {
+func (m Model) renderAnnotationBody(current Variant, window renderWindow, width int) []string {
 	features := overlappingFeatures(m.context.Features, window.visibleStart, window.visibleEnd)
 	featureNames := "None"
 	if len(features) > 0 {
@@ -213,6 +216,7 @@ func (m Model) renderDetailBody(current Variant, window renderWindow, width int)
 	}
 
 	lines := []string{
+		lipgloss.NewStyle().Bold(true).Foreground(m.theme.Text).Render("Annotation"),
 		labeledText("gene", current.Gene, width, m.theme),
 		labeledText("position", formatPosition(current.Position), width, m.theme),
 		labeledText("ref/alt", fmt.Sprintf("%s -> %s", coalesce(current.Ref, "-"), coalesce(current.Alt, "-")), width, m.theme),
@@ -246,26 +250,142 @@ func (m Model) renderEvidenceBody(current Variant, width int) []string {
 	return lines
 }
 
-func (m Model) renderExpandedDetail(current Variant, width int) string {
-	body := []string{
-		fmt.Sprintf("Focused variant: %s %s", coalesce(current.Gene, "gene?"), coalesce(primaryHGVS(current.HGVS), fmt.Sprintf("%s>%s", current.Ref, current.Alt))),
-		fmt.Sprintf("Ref/Alt: %s -> %s", coalesce(current.Ref, "-"), coalesce(current.Alt, "-")),
-		fmt.Sprintf("Consequence: %s | Impact: %s", coalesce(current.Consequence, "n/a"), coalesce(current.Impact, "n/a")),
-		"Press Enter again to emit crust.SubmitMsg for this variant, or Esc to return to browsing.",
-	}
-	return m.renderBox("Focused Detail", body, width)
-}
-
 func (m Model) renderHelpBox(width int) string {
 	body := []string{
-		"j/k or up/down : step between variants",
-		"h/l or left/right : narrow or widen sequence context",
-		"tab : cycle summary, detail, HGVS, and evidence lenses",
-		"enter : open focused detail, then confirm the focused variant",
-		"esc : close help, leave focused detail, or cancel the overlay",
+		"left/right or up/down : move to the previous or next variant",
+		"+/- or shift+left/right : narrow or widen the sequence window",
+		"tab or shift+tab : move across Summary, Annotation, HGVS, and Evidence",
+		"1-4 : jump directly to a lens",
+		"enter : select the focused variant",
+		"esc : close help or cancel the overlay",
 		"? : toggle this help",
+		"Legend: ref and alt rows use different colors, the highlighted base marks the changed site, and ^ marks the focused position.",
+		"Feature glyphs: = exon, # CDS, ~ domain, : motif, + primer.",
+		"j/k/h/l remain available as compatibility aliases",
 	}
 	return m.renderBox("VariantLens Help", body, width)
+}
+
+func (m Model) renderVariantRail(width int) string {
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	label := "Variants"
+	if width < 48 {
+		label = "Var"
+	}
+	chips := []string{labelStyle.Render(label)}
+
+	radius := 2
+	if width < 72 {
+		radius = 1
+	}
+	if width < 48 {
+		radius = 0
+	}
+	start := maxInt(0, m.selected-radius)
+	end := minInt(len(m.context.Variants), m.selected+radius+1)
+	if start > 0 {
+		chips = append(chips, labelStyle.Render("..."))
+	}
+	for i := start; i < end; i++ {
+		chips = append(chips, m.renderVariantChip(i, m.context.Variants[i], i == m.selected))
+	}
+	if end < len(m.context.Variants) {
+		chips = append(chips, labelStyle.Render("..."))
+	}
+	return strings.Join(wrapRenderedSegments(chips, " ", width), "\n")
+}
+
+func (m Model) renderTabs(width int) string {
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	summaryLabel := "1 Summary"
+	annotationLabel := "2 Annotation"
+	hgvsLabel := "3 HGVS"
+	evidenceLabel := "4 Evidence"
+	contextLabel := fmt.Sprintf("Context [ %dbp ]", m.context.ContextSize)
+	if width < 48 {
+		summaryLabel = "1:S"
+		annotationLabel = "2:A"
+		hgvsLabel = "3:H"
+		evidenceLabel = "4:E"
+		contextLabel = fmt.Sprintf("C%d", m.context.ContextSize)
+	} else if width < 72 {
+		summaryLabel = "1 Sum"
+		annotationLabel = "2 Ann"
+		hgvsLabel = "3 HGVS"
+		evidenceLabel = "4 Evid"
+		contextLabel = fmt.Sprintf("Ctx %dbp", m.context.ContextSize)
+	}
+	parts := []string{
+		labelStyle.Render("Lenses"),
+		m.renderTab(ViewSummary, summaryLabel),
+		m.renderTab(ViewAnnotation, annotationLabel),
+		m.renderTab(ViewHGVS, hgvsLabel),
+		m.renderTab(ViewEvidence, evidenceLabel),
+		labelStyle.Render(contextLabel),
+	}
+	return strings.Join(wrapRenderedSegments(parts, " ", width), "\n")
+}
+
+func (m Model) renderFooter(width int) string {
+	parts := []string{}
+	if width < 48 {
+		parts = append(parts,
+			m.renderActionKey("Arrows", "browse"),
+			m.renderActionKey("+/-", "size"),
+			m.renderActionKey("Tab/1-4", "lens"),
+			m.renderActionKey("Enter", "pick"),
+			m.renderActionKey("Esc", "close"),
+		)
+	} else if width < 72 {
+		parts = append(parts,
+			m.renderActionKey("Arrows", "browse"),
+			m.renderActionKey("+/-", "window"),
+			m.renderActionKey("Tab/1-4", "lens"),
+			m.renderActionKey("Enter", "select"),
+			m.renderActionKey("Esc", "close"),
+		)
+	} else {
+		parts = append(parts,
+			m.renderActionKey("Arrows", "variant"),
+			m.renderActionKey("+/-", "context"),
+			m.renderActionKey("Tab", "lens"),
+			m.renderActionKey("1-4", "jump"),
+			m.renderActionKey("Enter", "select"),
+			m.renderActionKey("?", "help"),
+			m.renderActionKey("Esc", "close"),
+		)
+	}
+	lines := wrapRenderedSegments(parts, "   ", width)
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderLegend(width int) []string {
+	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(m.theme.Text).Render("Legend")}
+
+	baseLegend := []string{
+		m.renderLegendToken(m.theme.RefBase, "A", "ref"),
+		m.renderLegendToken(m.theme.AltBase, "A", "alt"),
+		m.renderLegendTokenWithBg(m.theme.Selection, m.theme.MismatchBg, "A", "changed"),
+		m.renderLegendToken(m.theme.Selection, "^", "focus"),
+	}
+	featureLegend := []string{
+		m.renderFeatureLegendToken("=", m.theme.FeatureExon, "exon"),
+		m.renderFeatureLegendToken("#", m.theme.FeatureCDS, "cds"),
+		m.renderFeatureLegendToken("~", m.theme.FeatureDomain, "domain"),
+		m.renderFeatureLegendToken(":", m.theme.FeatureMotif, "motif"),
+		m.renderFeatureLegendToken("+", m.theme.FeaturePrimer, "primer"),
+	}
+
+	if width < 72 {
+		lines = append(lines, "  "+strings.Join(baseLegend, "  "))
+		lines = append(lines, "  "+strings.Join(featureLegend[:3], "  "))
+		lines = append(lines, "  "+strings.Join(featureLegend[3:], "  "))
+		return lines
+	}
+
+	lines = append(lines, "  "+strings.Join(baseLegend, "  "))
+	lines = append(lines, "  "+strings.Join(featureLegend, "  "))
+	return lines
 }
 
 func (m Model) renderBox(title string, body []string, width int) string {
@@ -458,6 +578,54 @@ func (m Model) featureColor(kind string) color.Color {
 	}
 }
 
+func (m Model) renderVariantChip(index int, variant Variant, active bool) string {
+	label := fmt.Sprintf("[%d %s]", index+1, coalesce(primaryHGVS(variant.HGVS), fmt.Sprintf("%s>%s", variant.Ref, variant.Alt)))
+	label = truncatePlain(label, 20)
+
+	base := lipgloss.NewStyle().
+		Foreground(m.theme.TextMuted).
+		BorderForeground(m.theme.Border)
+	if active {
+		base = base.Bold(true).Foreground(m.theme.Selection).Background(m.theme.MismatchBg)
+	} else {
+		base = base.Foreground(m.impactColor(variant.Impact))
+	}
+	return base.Render(label)
+}
+
+func (m Model) renderTab(mode ViewMode, label string) string {
+	style := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	label = "[" + label + "]"
+	if m.viewMode == mode {
+		style = style.Bold(true).Foreground(m.theme.Selection).Background(m.theme.MismatchBg)
+	}
+	return style.Render(label)
+}
+
+func (m Model) renderActionKey(key, label string) string {
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Selection)
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	return keyStyle.Render(key) + " " + labelStyle.Render(label)
+}
+
+func (m Model) renderLegendToken(color color.Color, marker, label string) string {
+	markerStyle := lipgloss.NewStyle().Bold(true).Foreground(color)
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	return markerStyle.Render(marker) + " " + labelStyle.Render(label)
+}
+
+func (m Model) renderLegendTokenWithBg(color, background color.Color, marker, label string) string {
+	markerStyle := lipgloss.NewStyle().Bold(true).Foreground(color).Background(background)
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	return markerStyle.Render(marker) + " " + labelStyle.Render(label)
+}
+
+func (m Model) renderFeatureLegendToken(marker string, color color.Color, label string) string {
+	markerStyle := lipgloss.NewStyle().Bold(true).Foreground(color)
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	return markerStyle.Render("["+marker+"]") + " " + labelStyle.Render(label)
+}
+
 func labeledLine(labelStyle, textStyle lipgloss.Style, label, value string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, labelStyle.Render(label), textStyle.Render(value))
 }
@@ -484,6 +652,16 @@ func labeledText(label, text string, width int, theme Theme) string {
 		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, labelStyle.Render(currentLabel), textStyle.Render(line)))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func wrappedMutedText(text string, width int, theme Theme) string {
+	lines := wrapWords(text, clampMin(width, 20))
+	style := lipgloss.NewStyle().Foreground(theme.TextMuted)
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		rendered = append(rendered, style.Render(line))
+	}
+	return strings.Join(rendered, "\n")
 }
 
 func alignAlleles(refSegment string, offset int, refAllele, altAllele string) (string, string, int) {
@@ -570,6 +748,25 @@ func wrapWords(text string, width int) []string {
 			continue
 		}
 		lines = append(lines, word)
+	}
+	return lines
+}
+
+func wrapRenderedSegments(segments []string, separator string, width int) []string {
+	width = clampMin(width, 8)
+	if len(segments) == 0 {
+		return nil
+	}
+
+	lines := []string{segments[0]}
+	for _, segment := range segments[1:] {
+		last := lines[len(lines)-1]
+		candidate := last + separator + segment
+		if lipgloss.Width(candidate) <= width {
+			lines[len(lines)-1] = candidate
+			continue
+		}
+		lines = append(lines, segment)
 	}
 	return lines
 }
