@@ -18,3 +18,7 @@ bin/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local demo binaries
+/demo
+*/demo
