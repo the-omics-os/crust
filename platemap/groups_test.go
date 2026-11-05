@@ -171,3 +171,30 @@ func TestCopyKeepsGroupsApart(t *testing.T) {
 		t.Fatal("Plate() shares its Groups with the model")
 	}
 }
+
+func TestGroupNumbersReplaceTheDots(t *testing.T) {
+	m := New(WithPlate(groupedPlate()), WithViewMode(ViewGroups), WithGridOnly(true), WithGroupNumbers(true), WithCursor(7, 11))
+	got := rowCells(t, m.Render(), 0)
+	want := []string{"1", "2", "2", "○", "1!", "◌", "+", "·", "·", "·", "·", "·"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("row A = %q, want %q", got, want)
+	}
+	m.SetGroupNumbers(false)
+	if m.GroupNumbers() || rowCells(t, m.Render(), 0)[0] != "●" {
+		t.Fatal("SetGroupNumbers(false) should bring the dots back")
+	}
+}
+
+func TestTheCursorsRowAndColumnHeadersStandOut(t *testing.T) {
+	m := New(WithPlate(groupedPlate()), WithGridOnly(true), WithCursor(3, 4))
+	lines := strings.Split(m.Render(), "\n")
+	marked := func(s string) bool { return strings.Contains(s, "1;4;") || strings.Contains(s, "[1;4") }
+	header := lines[0]
+	i := strings.Index(plain(header), " 5 ")
+	if i < 0 || !strings.Contains(header, "\x1b[1;4") {
+		t.Fatalf("column 5 header not bold and underlined: %q", header)
+	}
+	if !marked(lines[4]) || marked(lines[3]) {
+		t.Fatalf("only row D's letter should be bold and underlined:\n%q\n%q", lines[3], lines[4])
+	}
+}

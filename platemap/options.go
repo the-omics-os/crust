@@ -119,6 +119,16 @@ func WithCursor(row, col int) Option {
 	}
 }
 
+// WithGroupNumbers draws each well's group number (1-9, in PlateData.Groups
+// order) instead of a dot in the Groups view, still in the group's colour,
+// so groups can be told apart without colour. Groups past the ninth keep
+// the dot.
+func WithGroupNumbers(on bool) Option {
+	return func(m *Model) {
+		m.groupNumbers = on
+	}
+}
+
 // WithGridOnly draws only the grid (column numbers, row letters and wells),
 // without the header, separator and footer, for a host that draws its own
 // lines around the plate. All rows fit when the height allows one line for

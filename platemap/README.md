@@ -84,6 +84,10 @@ func main() {
 
 `PlateData.Groups` lists the group names in order; group *i* is drawn in `Theme.Groups[i]` (repeating past the end), so a group keeps its colour while wells change. The default `Theme.Groups` is Crust's category palette (the one `periodictable` uses), ordered so the first groups are far apart and none is the orange that marks attention. `GroupColor(name)` returns a group's colour, for a host drawing its own legend. The full render adds a legend line under the grid; the footer names the focused well's group.
 
+`WithGroupNumbers(true)` (or `SetGroupNumbers`) draws each group's number, 1 to 9 in `PlateData.Groups` order, instead of the dot, still in the group's colour, so groups can be told apart on a terminal without colour or by a reader who can't tell the colours apart.
+
+In every view, the focused well's row letter and column number are bold and underlined.
+
 `WithGridOnly(true)` draws only the column numbers, row letters and wells, for a host that draws its own question, legend and focus line around the plate.
 
 ```go
@@ -139,6 +143,7 @@ The package includes tests for:
 - submit/cancel behavior
 - streaming updates
 - render stability across 96/384/1536 formats
-- the Groups view: symbols, group colours, legend, grid-only rendering
+- the Groups view: symbols, group colours, group numbers, legend, grid-only rendering
+- the focused row and column headers
 
 <!-- GIF PLACEHOLDER: streaming well updates -->

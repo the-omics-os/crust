@@ -51,6 +51,7 @@ type Model struct {
 	detailExpanded bool
 	helpVisible    bool
 	gridOnly       bool
+	groupNumbers   bool
 }
 
 // New creates a PlateMap with the given options.
@@ -230,6 +231,13 @@ func (m Model) Mode() ViewMode { return m.mode }
 
 // Cursor returns the focused row and column.
 func (m Model) Cursor() (int, int) { return m.cursorRow, m.cursorCol }
+
+// SetGroupNumbers switches the Groups view between dots and each group's
+// number (1 for the first group in PlateData.Groups, up to 9).
+func (m *Model) SetGroupNumbers(on bool) { m.groupNumbers = on }
+
+// GroupNumbers reports whether the Groups view draws group numbers.
+func (m Model) GroupNumbers() bool { return m.groupNumbers }
 
 // GroupColor returns the colour the Groups view draws group in, so a host can
 // draw a matching legend. ok is false for a group not in PlateData.Groups.

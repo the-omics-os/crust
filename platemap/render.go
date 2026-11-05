@@ -134,6 +134,9 @@ func (m Model) renderGrid() string {
 		if col == m.selectedCol {
 			style = style.Background(m.theme.SelectedCol)
 		}
+		if col == m.cursorCol {
+			style = style.Bold(true).Underline(true) // the cursor's column
+		}
 		headerCells = append(headerCells, style.Render(fmt.Sprintf("%d", col+1)))
 	}
 
@@ -146,6 +149,9 @@ func (m Model) renderGrid() string {
 		style := rowLabelStyle
 		if row == m.selectedRow {
 			style = style.Background(m.theme.SelectedRow)
+		}
+		if row == m.cursorRow {
+			style = style.Bold(true).Underline(true) // the cursor's row
 		}
 
 		var cells []string
@@ -247,6 +253,15 @@ func (m Model) groupGlyphAndColor(well Well, control string) (string, color.Colo
 		return "○", m.theme.Missing
 	}
 	fg, _ := m.GroupColor(well.Group)
+	if m.groupNumbers {
+		// The group's number, for a terminal without colour or a reader
+		// who can't tell the colours apart; it replaces ● and ◉ alike.
+		for i, name := range m.plate.Groups {
+			if name == well.Group && i < 9 {
+				return string(rune('1' + i)), fg
+			}
+		}
+	}
 	if well.Noted {
 		return "◉", fg
 	}
