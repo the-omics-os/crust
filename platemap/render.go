@@ -34,12 +34,18 @@ type plateStats struct {
 func (m Model) render() string {
 	m.normalize()
 
-	parts := []string{
-		m.renderHeader(),
-		m.renderGrid(),
-		m.renderSeparator(),
-		m.renderFooter(),
+	if m.gridOnly {
+		parts := []string{m.renderGrid()}
+		if m.helpVisible {
+			parts = append(parts, m.renderHelp())
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
+	parts := []string{m.renderHeader(), m.renderGrid()}
+	if m.mode == ViewGroups {
+		parts = append(parts, m.renderGroupLegend())
+	}
+	parts = append(parts, m.renderSeparator(), m.renderFooter())
 	if m.helpVisible {
 		parts = append(parts, m.renderHelp())
 	}
@@ -156,7 +162,7 @@ func (m Model) renderGrid() string {
 
 func (m Model) renderCell(row, col int, well Well, ok bool, stats plateStats) string {
 	glyph, fg := m.cellGlyphAndColor(well, ok, stats)
-	style := lipgloss.NewStyle().Width(cellWidth).Align(lipgloss.Center).Foreground(fg)
+	style := lipgloss.NewStyle()
 
 	if row == m.selectedRow {
 		style = style.Background(m.theme.SelectedRow)
@@ -168,11 +174,20 @@ func (m Model) renderCell(row, col int, well Well, ok bool, stats plateStats) st
 		style = style.Background(m.theme.CursorBg).Bold(true)
 	}
 
-	return style.Render(glyph)
+	if m.mode == ViewGroups && ok && well.Flagged && !well.Missing {
+		// The mark has its own colour, so the cell is built in pieces, each
+		// with the cell's background; the glyph stays in the middle column.
+		mark := style.Foreground(m.theme.Missing).Bold(true).Render("!")
+		return style.Render(" ") + style.Foreground(fg).Render(glyph) + mark
+	}
+	return style.Width(cellWidth).Align(lipgloss.Center).Foreground(fg).Render(glyph)
 }
 
 func (m Model) cellGlyphAndColor(well Well, ok bool, stats plateStats) (string, color.Color) {
 	if !ok {
+		if m.mode == ViewGroups {
+			return "·", m.theme.Empty // a faint dot: the well is there, unused
+		}
 		return " ", m.theme.Empty
 	}
 	if well.Missing {
@@ -193,6 +208,8 @@ func (m Model) cellGlyphAndColor(well Well, ok bool, stats plateStats) (string, 
 			return glyph, fg
 		}
 		return ".", m.theme.Sample
+	case ViewGroups:
+		return m.groupGlyphAndColor(well, control)
 	case ViewRawSignal:
 		if glyph, fg, handled := overlayGlyphAndColor(well, control, m.theme); handled {
 			return glyph, fg
@@ -214,6 +231,62 @@ func (m Model) cellGlyphAndColor(well Well, ok bool, stats plateStats) (string, 
 	default:
 		return ".", m.theme.Sample
 	}
+}
+
+// groupGlyphAndColor draws a well in the Groups view: ● in its group's colour,
+// ◉ when it carries a note, ○ in Theme.Missing when it has no group yet, ◌
+// when it is excluded. A control without a group keeps its control glyph.
+func (m Model) groupGlyphAndColor(well Well, control string) (string, color.Color) {
+	if well.Excluded {
+		return "◌", m.theme.Empty
+	}
+	if well.Group == "" {
+		if glyph, fg, handled := controlOnlyGlyphAndColor(control, m.theme); handled {
+			return glyph, fg
+		}
+		return "○", m.theme.Missing
+	}
+	fg, _ := m.GroupColor(well.Group)
+	if well.Noted {
+		return "◉", fg
+	}
+	return "●", fg
+}
+
+// renderGroupLegend is one line: each group's dot and name, then the marks.
+// Entries that don't fit the width are left out, ending in "…".
+func (m Model) renderGroupLegend() string {
+	type entry struct {
+		glyph, text string
+		fg          color.Color
+	}
+	var entries []entry
+	for _, name := range m.plate.Groups {
+		fg, _ := m.GroupColor(name)
+		entries = append(entries, entry{"●", name, fg})
+	}
+	entries = append(entries,
+		entry{"○", "unassigned", m.theme.Missing},
+		entry{"◉", "noted", m.theme.TextMuted},
+		entry{"!", "flagged", m.theme.Missing},
+		entry{"◌", "excluded", m.theme.Empty},
+	)
+	text := lipgloss.NewStyle().Foreground(m.theme.Text)
+	var parts []string
+	used := 0
+	for i, e := range entries {
+		width := lipgloss.Width(e.glyph + " " + e.text)
+		if used > 0 {
+			width += 2
+		}
+		if used+width > m.renderWidth() || (i < len(entries)-1 && used+width+3 > m.renderWidth()) {
+			parts = append(parts, text.Render("…"))
+			break
+		}
+		parts = append(parts, lipgloss.NewStyle().Foreground(e.fg).Render(e.glyph)+" "+text.Render(e.text))
+		used += width
+	}
+	return strings.Join(parts, "  ")
 }
 
 func (m Model) renderSeparator() string {
@@ -275,6 +348,15 @@ func (m Model) focusSummary(well Well, ok bool) string {
 	}
 	if reagent := strings.TrimSpace(well.Reagent); reagent != "" {
 		parts = append(parts, "Reagent: "+reagent)
+	}
+	if group := strings.TrimSpace(well.Group); group != "" {
+		parts = append(parts, "Group: "+group)
+	}
+	if well.Excluded {
+		parts = append(parts, "Excluded")
+	}
+	if well.Flagged {
+		parts = append(parts, "Flagged")
 	}
 	if well.Hit && wellKindLabel(well) != "Hit" {
 		parts = append(parts, "HIT")
@@ -366,6 +448,7 @@ func (m Model) renderHelp() string {
 		mutedStyle.Render("Keys: arrows move | shift+arrows select row or column | tab/shift+tab change view"),
 		mutedStyle.Render("Enter inspects the focused well and emits SubmitMsg | esc clears active context or exits"),
 		mutedStyle.Render("Glyphs: + positive ctrl | - negative ctrl | # hit | . sample | o empty | x missing"),
+		mutedStyle.Render("Groups view: ● group (its colour) | ◉ noted | ! flagged | ○ unassigned | ◌ excluded | · no well"),
 	)
 }
 
@@ -382,7 +465,16 @@ func (m Model) gridViewportSize() (int, int) {
 		visibleCols = cols
 	}
 
+	// header (2) + column numbers + separator + footer + help, or in a
+	// grid-only plate the column numbers and help alone; the Groups view
+	// adds its legend line.
 	overhead := 2 + 1 + 1 + m.footerLineCount() + m.helpLineCount()
+	if m.mode == ViewGroups {
+		overhead++
+	}
+	if m.gridOnly {
+		overhead = 1 + m.helpLineCount()
+	}
 	visibleRows := m.renderHeight() - overhead
 	if visibleRows < 1 {
 		visibleRows = 1
@@ -403,7 +495,7 @@ func (m Model) footerLineCount() int {
 
 func (m Model) helpLineCount() int {
 	if m.helpVisible {
-		return 3
+		return 4
 	}
 	return 0
 }

@@ -34,6 +34,19 @@ type Well struct {
 	Reagent    string
 	Hit        bool
 	Missing    bool
+
+	// Group is the group the well's sample is assigned to, e.g. "control";
+	// "" means not assigned yet. Drawn by the Groups view.
+	Group string
+	// Noted marks a well that carries a note, e.g. the reason it was
+	// assigned to its group (drawn ◉ in the Groups view).
+	Noted bool
+	// Flagged marks a well that needs attention; the host decides why
+	// (drawn with "!" in the Groups view).
+	Flagged bool
+	// Excluded marks a sample that takes no part in the grouping, e.g. a QC
+	// pool or a blank (drawn ◌ in the Groups view).
+	Excluded bool
 }
 
 // PlateData is the full payload rendered by PlateMap.
@@ -42,6 +55,10 @@ type PlateData struct {
 	Wells    []Well
 	Title    string
 	Metadata map[string]string
+	// Groups lists the group names in order. A group's colour is
+	// Theme.Groups at its index, so it stays the same however the wells
+	// change. Wells with a group not listed here are drawn in Theme.Sample.
+	Groups []string
 }
 
 // Copy returns a deep copy of the plate payload.
@@ -50,6 +67,7 @@ func (p PlateData) Copy() PlateData {
 		Format: p.Format,
 		Title:  p.Title,
 		Wells:  append([]Well(nil), p.Wells...),
+		Groups: append([]string(nil), p.Groups...),
 	}
 	if p.Metadata != nil {
 		out.Metadata = make(map[string]string, len(p.Metadata))

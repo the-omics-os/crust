@@ -1,6 +1,8 @@
 package platemap
 
 import (
+	"image/color"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/the-omics-os/crust"
@@ -18,6 +20,9 @@ const (
 	ViewHitClass
 	ViewControlLayout
 	ViewMissingness
+	// ViewGroups draws each sample's group (Well.Group) as a dot in the
+	// group's colour. Added last so the other modes keep their values.
+	ViewGroups
 )
 
 var allViewModes = [...]ViewMode{
@@ -27,6 +32,7 @@ var allViewModes = [...]ViewMode{
 	ViewHitClass,
 	ViewControlLayout,
 	ViewMissingness,
+	ViewGroups,
 }
 
 // Model is the Bubble Tea model for PlateMap.
@@ -44,6 +50,7 @@ type Model struct {
 	selectedCol    int
 	detailExpanded bool
 	helpVisible    bool
+	gridOnly       bool
 }
 
 // New creates a PlateMap with the given options.
@@ -224,6 +231,20 @@ func (m Model) Mode() ViewMode { return m.mode }
 // Cursor returns the focused row and column.
 func (m Model) Cursor() (int, int) { return m.cursorRow, m.cursorCol }
 
+// GroupColor returns the colour the Groups view draws group in, so a host can
+// draw a matching legend. ok is false for a group not in PlateData.Groups.
+func (m Model) GroupColor(group string) (color.Color, bool) {
+	if len(m.theme.Groups) == 0 {
+		return m.theme.Sample, false
+	}
+	for i, name := range m.plate.Groups {
+		if name == group {
+			return m.theme.Groups[i%len(m.theme.Groups)], true
+		}
+	}
+	return m.theme.Sample, false
+}
+
 // Coordinate returns the focused well coordinate.
 func (m Model) Coordinate() string { return coordinate(m.cursorRow, m.cursorCol) }
 
@@ -340,6 +361,8 @@ func (v ViewMode) String() string {
 		return "Control Layout"
 	case ViewMissingness:
 		return "Missingness"
+	case ViewGroups:
+		return "Groups"
 	default:
 		return ViewRawSignal.String()
 	}
@@ -405,6 +428,10 @@ func wellToMap(well Well) map[string]any {
 		"reagent":    well.Reagent,
 		"hit":        well.Hit,
 		"missing":    well.Missing,
+		"group":      well.Group,
+		"noted":      well.Noted,
+		"flagged":    well.Flagged,
+		"excluded":   well.Excluded,
 	}
 }
 
