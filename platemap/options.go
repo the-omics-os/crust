@@ -21,6 +21,9 @@ type Theme struct {
 	Text         color.Color
 	TextMuted    color.Color
 	Header       color.Color
+	// Groups colours the groups of the Groups view, in PlateData.Groups
+	// order; it repeats when there are more groups than colours.
+	Groups []color.Color
 }
 
 // DefaultTheme returns sensible terminal defaults.
@@ -39,6 +42,20 @@ func DefaultTheme() Theme {
 		Text:         lipgloss.Color("252"),
 		TextMuted:    lipgloss.Color("245"),
 		Header:       lipgloss.Color("117"),
+		// Crust's category palette (periodictable), ordered so that the
+		// first groups are far apart and none is Missing's orange, which
+		// the Groups view uses for "needs attention".
+		Groups: []color.Color{
+			lipgloss.Color("39"),
+			lipgloss.Color("77"),
+			lipgloss.Color("204"),
+			lipgloss.Color("220"),
+			lipgloss.Color("81"),
+			lipgloss.Color("149"),
+			lipgloss.Color("109"),
+			lipgloss.Color("117"),
+			lipgloss.Color("203"),
+		},
 	}
 }
 
@@ -99,5 +116,25 @@ func WithCursor(row, col int) Option {
 	return func(m *Model) {
 		m.cursorRow = row
 		m.cursorCol = col
+	}
+}
+
+// WithGroupNumbers draws each well's group number (1-9, in PlateData.Groups
+// order) instead of a dot in the Groups view, still in the group's colour,
+// so groups can be told apart without colour. Groups past the ninth keep
+// the dot.
+func WithGroupNumbers(on bool) Option {
+	return func(m *Model) {
+		m.groupNumbers = on
+	}
+}
+
+// WithGridOnly draws only the grid (column numbers, row letters and wells),
+// without the header, separator and footer, for a host that draws its own
+// lines around the plate. All rows fit when the height allows one line for
+// the column numbers plus one per row.
+func WithGridOnly(gridOnly bool) Option {
+	return func(m *Model) {
+		m.gridOnly = gridOnly
 	}
 }
