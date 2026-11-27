@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
@@ -9,6 +10,9 @@ import (
 )
 
 func main() {
+	groups := flag.Bool("groups", false, "show synthetic samples in groups (the Groups view)")
+	flag.Parse()
+
 	model := demoModel{
 		inner: platemap.New(
 			platemap.WithPlate(samplePlate()),
@@ -16,6 +20,15 @@ func main() {
 			platemap.WithHeight(20),
 			platemap.WithCursor(1, 2),
 		),
+	}
+	if *groups {
+		model.inner = platemap.New(
+			platemap.WithPlate(groupedPlate()),
+			platemap.WithViewMode(platemap.ViewGroups),
+			platemap.WithWidth(92),
+			platemap.WithHeight(20),
+			platemap.WithCursor(3, 0),
+		)
 	}
 
 	program := tea.NewProgram(model)
@@ -67,4 +80,29 @@ func samplePlate() platemap.PlateData {
 			{Row: 7, Col: 11, Signal: 1.03, Normalized: 1.02, ZScore: 1.40, Control: platemap.ControlSample, SampleID: "TP53-01", Reagent: "TP53-siRNA"},
 		},
 	}
+}
+
+// groupedPlate is a synthetic study: samples in two conditions plus a
+// left-out sample, a few still unassigned, a flagged one and two QC pools.
+func groupedPlate() platemap.PlateData {
+	plate := platemap.PlateData{
+		Format: platemap.Plate96,
+		Title:  "Study Plate",
+		Groups: []string{"vehicle", "treated", "left out"},
+	}
+	add := func(row, col int, id, group string) *platemap.Well {
+		plate.Wells = append(plate.Wells, platemap.Well{Row: row, Col: col, SampleID: id, Group: group, Control: platemap.ControlSample})
+		return &plate.Wells[len(plate.Wells)-1]
+	}
+	for col := 0; col < 12; col++ {
+		add(3, col, "S"+string(rune('A'+col))+"1", "vehicle")
+		add(4, col, "S"+string(rune('A'+col))+"2", "treated")
+	}
+	add(5, 0, "SX1", "")
+	add(5, 1, "SX2", "")
+	add(5, 2, "SX3", "left out").Noted = true
+	add(5, 3, "SX4", "treated").Flagged = true
+	add(2, 5, "QC-1", "").Excluded = true
+	add(6, 5, "QC-2", "").Excluded = true
+	return plate
 }
